@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>🔧 مولّد data.js</title>
+<style>
+body{font-family:system-ui,Tahoma,sans-serif;max-width:700px;margin:40px auto;padding:20px;background:#f6f3ec;color:#22242a;line-height:1.7}
+h1{color:#b5762a}
+.drop{border:3px dashed #e4ddcc;border-radius:14px;padding:40px;text-align:center;background:#fff;cursor:pointer;margin:20px 0;transition:.2s}
+.drop:hover{border-color:#b5762a;background:#faf6ee}
+.drop.dragover{border-color:#2f8f78;background:#eff9f6;transform:scale(1.01)}
+.drop .icon{font-size:3em;margin-bottom:8px}
+button{background:#b5762a;color:#fff;border:none;padding:14px 24px;border-radius:12px;cursor:pointer;font-size:1.1em;font-weight:700;width:100%;margin-top:14px}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:hover:not(:disabled){background:#9c6324}
+.status{margin-top:12px;padding:12px;border-radius:10px;font-weight:600;display:none}
+.status.show{display:block}
+.status.ok{background:#d4f4e5;color:#2f8f78}
+.status.err{background:#fce5e5;color:#b13f3f}
+.status.wait{background:#fff4d6;color:#8a5a00}
+.info{background:#fff;border-radius:12px;padding:16px;margin-top:20px}
+.info h3{color:#2f8f78;margin-top:0}
+code{background:#faf6ee;padding:2px 6px;border-radius:4px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+<h1>🔧 مولّد data.js</h1>
+<p>ضع ملف <code>html.html</code> في الصندوق، وستحصل على <code>data.js</code> جاهزاً.</p>
+
+<div class="drop" id="drop">
+  <div class="icon">📄</div>
+  <div><b>اسحب ملف html.html هنا</b></div>
+  <div style="color:#5a6472;font-size:.9em;margin-top:4px">أو اضغط للاختيار</div>
+</div>
+<input type="file" id="file" accept=".html,.htm" hidden>
+
+<button id="download" disabled>📥 تحميل data.js</button>
+<div class="status" id="status"></div>
+
+<div class="info">
+  <h3>كيفية الاستخدام:</h3>
+  <ol>
+    <li>ضع ملف <code>html.html</code> في الأداة</li>
+    <li>ستستخرج الأداة البيانات</li>
+    <li>سيُحمَّل <code>data.js</code> على جهازك</li>
+    <li>ارفع <code>data.js</code> إلى GitHub</li>
+  </ol>
+</div>
+
+<script>
+(function(){
+  const drop = document.getElementById('drop');
+  const file = document.getElementById('file');
+  const btn = document.getElementById('download');
+  const st = document.getElementById('status');
+  let extractedData = null;
+
+  function setStatus(cls, msg){
+    st.className = 'status show ' + cls;
+    st.innerHTML = msg;
+  }
+
+  function processHTML(html){
+    const match = html.match(/const\s+D\s*=\s*(\{[\s\S]*?\});\s*\n\s*\/\*/);
+    if(!match){
+      setStatus('err', '❌ لم يُعثر على البيانات (const D)');
+      return;
+    }
+    try{
+      const data = new Function('return ' + match[1])();
+      if(!data.lessons || !data.cards){
+        setStatus('err', '❌ البيانات ناقصة');
+        return;
+      }
+      extractedData = data;
+      setStatus('ok',
+        '✅ تم الاستخراج!<br><b>' + data.cards.length + '</b> بطاقة · <b>' + data.lessons.length + '</b> درس<br>اضغط لتحميل data.js'
+      );
+      btn.disabled = false;
+    }catch(e){
+      setStatus('err', '❌ خطأ: ' + e.message);
+    }
+  }
+
+  function handleFile(f){
+    if(!f) return;
+    setStatus('wait', '⏳ جارٍ القراءة...');
+    const reader = new FileReader();
+    reader.onload = (e) => processHTML(e.target.result);
+    reader.onerror = () => setStatus('err', '❌ فشل القراءة');
+    reader.readAsText(f);
+  }
+
+  drop.addEventListener('click', () => file.click());
+  file.addEventListener('change', e => handleFile(e.target.files[0]));
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('dragover');
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  btn.addEventListener('click', () => {
+    if(!extractedData) return;
+    const content =
+      '/* Sproochentest Pro — Data (' + extractedData.cards.length + ' cards) */\n' +
+      'window.SPROOCHENTEST_DATA = ' + JSON.stringify(extractedData) + ';\n';
+
+    const blob = new Blob([content], {type:'application/javascript;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'data.js';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+    setStatus('ok', '✅ تم تحميل data.js — ارفعه إلى GitHub');
+  });
+})();
+</script>
+</body>
+</html>
