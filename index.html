@@ -2,6 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#b5762a" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1720" media="(prefers-color-scheme: dark)">
@@ -2302,16 +2303,25 @@ $("importBtn").addEventListener("click", function(){
 $("importFile").addEventListener("change", function(e){
   const f = e.target.files && e.target.files[0];
   if (!f) return;
+  if (f.size > 2*1024*1024){ $("msg").textContent = "الملف كبير جداً"; toast("ملف غير صالح"); e.target.value = ""; return; }
   const r = new FileReader();
   r.onload = function(){
     try {
       const d = JSON.parse(r.result);
       if (!d || !d.known || typeof d.known !== "object") throw new Error("صيغة غير معروفة");
-      const merge = confirm("دمج مع التقدم الحالي؟\n\n«موافق» = دمج · «إلغاء» = استبدال كامل");
+      const valid = {};
+      D.cards.forEach(function(c){ valid[c.key] = true; });
+      const clean = {};
+      Object.keys(d.known).forEach(function(k){
+        if (Object.prototype.hasOwnProperty.call(valid, k) && d.known[k]) clean[k] = true;
+      });
+      const total = Object.keys(clean).length;
+      if (!total) throw new Error("لا توجد علامات مطابقة لبطاقات هذا التطبيق");
+      const merge = confirm("سيتم استيراد " + total + " علامة.\n\nدمج مع التقدم الحالي؟\n«موافق» = دمج · «إلغاء» = استبدال كامل");
       if (merge){
-        Object.keys(d.known).forEach(function(k){ st.known[k] = true; });
+        Object.keys(clean).forEach(function(k){ st.known[k] = true; });
       } else {
-        st.known = d.known;
+        st.known = clean;
       }
       save();
       rebuild(true);
