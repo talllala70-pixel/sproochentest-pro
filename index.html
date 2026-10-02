@@ -4,8 +4,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#b5762a" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0f1720" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#b5762a">
 <meta name="description" content="بطاقات مراجعة Sproochentest — مفردات، جمل وقواعد من دروسك.">
 <title>بطاقات Sproochentest — الدروس ذات الأولوية</title>
 <style>
@@ -57,7 +56,7 @@ h1{font-size:1.5em;color:var(--accent);margin:0 0 4px;text-align:center;line-hei
 .bar{height:8px;background:var(--border);border-radius:5px;overflow:hidden;margin:10px 0 4px}
 .bar>div{height:100%;background:var(--accent2);width:0;transition:width .3s}
 .stat{color:var(--muted);font-size:.85em;text-align:center}
-#stage{perspective:1000px;margin:16px 0}
+#stage{perspective:1000px;margin:16px 0;position:relative}
 .card{
   min-height:220px;background:var(--card);border:2px solid var(--border);border-radius:18px;
   padding:34px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -132,10 +131,53 @@ textarea{
 }
 #toast span.show{opacity:.95;transform:translateY(0)}
 @media print{
-  .topbar,.ctl,.tools,.bar,.search,.row,#toast,.card .hint{display:none!important}
+  .topbar,.ctl,.tools,.bar,.search,.row,#toast,.card .hint,.audio-btn,.srs-stat,.schema-warn,#undoBtn{display:none!important}
   body{background:#fff;color:#000}
   .card{border:1px solid #999;box-shadow:none;min-height:auto}
 }
+/* === SRS buttons === */
+.btn.again{background:#b13f3f;color:#fff;border-color:#b13f3f;font-weight:700}
+.btn.hard{background:#c2410c;color:#fff;border-color:#c2410c;font-weight:700}
+.btn.easy{background:#2563eb;color:#fff;border-color:#2563eb;font-weight:700}
+.btn .srs-sub{display:block;font-size:.72em;opacity:.85;font-weight:400;margin-top:1px}
+#srsRow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+#srsRow .btn{padding:9px 4px;min-width:0;font-size:.92em;line-height:1.35}
+
+/* === Undo button (Phase 2) === */
+#undoBtn {
+  background:#444; color:#fff; border-color:#444;
+  animation: undoPulse 0.6s ease-out;
+}
+#undoBtn[hidden]{ display: none !important; }
+@keyframes undoPulse {
+  from { transform: scale(1.08); opacity: 0.6; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+/* === Audio button === */
+#stage .audio-btn{
+  position:absolute;top:8px;inset-inline-end:10px;
+  background:var(--card2);border:1px solid var(--border);color:var(--text);
+  border-radius:50%;width:38px;height:38px;padding:0;
+  cursor:pointer;font-size:1.15em;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+  transition:border-color .15s,transform .1s;z-index:2;
+}
+#stage .audio-btn[hidden]{display:none}
+#stage .audio-btn:hover{border-color:var(--accent)}
+#stage .audio-btn:active{transform:scale(.93)}
+#stage .audio-btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+/* === Stats === */
+.srs-stat{color:var(--muted);font-size:.82em;text-align:center;margin-top:2px}
+.srs-stat b{color:var(--accent);font-weight:700}
+
+/* === Schema / storage warning === */
+.schema-warn{
+  display:none;background:#7c2d12;color:#fff;padding:6px 12px;
+  border-radius:8px;font-size:.8em;margin:6px 0;text-align:center;
+}
+.schema-warn.show{display:block}
 @media (prefers-reduced-motion: reduce){
   *{transition:none!important;animation:none!important}
 }
@@ -152,6 +194,7 @@ textarea{
     <button class="btn small" id="dirBtn" type="button"></button>
     <button class="btn small" id="modeBtn" type="button"></button>
     <button class="btn small" id="hideKnown" type="button"></button>
+    <button class="btn small" id="dueBtn" type="button" aria-pressed="false">⏰ المستحقة فقط</button>
   </div>
 
   <label class="lbl" for="search">🔍 بحث</label>
@@ -170,28 +213,36 @@ textarea{
   <div class="bar" role="progressbar" aria-labelledby="stat" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="pbWrap">
     <div id="pb"></div>
   </div>
-  <div class="stat" id="stat" aria-live="polite" role="status"></div>
+  <div class="stat" id="stat"></div>
+  <div class="srs-stat" id="srsStat"></div>
+  <div class="schema-warn" id="schemaWarn" role="alert"></div>
 
   <div id="cardView">
     <div id="stage">
       <div class="card" id="card" role="button" tabindex="0" aria-label="بطاقة"></div>
+      <button class="audio-btn" id="audioBtn" type="button" aria-label="نطق النص الظاهر" title="نطق (S)" hidden>🔊</button>
     </div>
     <div class="ctl">
       <button class="btn" id="prev" type="button" aria-label="البطاقة السابقة">▶ السابقة</button>
-      <button class="btn bad" id="nope" type="button">لم أعرفها</button>
-      <button class="btn good" id="yep" type="button">عرفتها ✓</button>
       <button class="btn" id="next" type="button" aria-label="البطاقة التالية">التالية ◀</button>
+    </div>
+    <div class="ctl" id="srsRow">
+      <button class="btn again" id="rAgain" type="button" data-rating="0">لم أعرفها<span class="srs-sub" id="ivl0"></span></button>
+      <button class="btn hard"  id="rHard"  type="button" data-rating="1">صعب<span class="srs-sub" id="ivl1"></span></button>
+      <button class="btn good"  id="rGood"  type="button" data-rating="2">عرفتها ✓<span class="srs-sub" id="ivl2"></span></button>
+      <button class="btn easy"  id="rEasy"  type="button" data-rating="3">سهل<span class="srs-sub" id="ivl3"></span></button>
     </div>
     <div class="ctl">
       <button class="btn main" id="copyCard" type="button">📋 نسخ هذه البطاقة</button>
+      <button class="btn" id="undoBtn" type="button" aria-label="تراجع عن آخر تقييم" hidden>↶ تراجع (Ctrl+Z)</button>
     </div>
-    <div class="msg" id="cardMsg" aria-live="polite"></div>
+    <div class="msg" id="cardMsg"></div>
     <div class="ctl">
       <button class="btn" id="shuf" type="button">🔀 خلط</button>
       <button class="btn" id="resetGroup" type="button">↺ تصفير تقدم هذه المجموعة</button>
     </div>
     <p class="foot" style="text-align:center">
-      اختصارات: <code>مسافة</code>/<code>Enter</code> قلب · <code>→</code> السابقة · <code>←</code> التالية · <code>↑</code> عرفتها · <code>↓</code> لم أعرفها
+      اختصارات: <code>مسافة</code>/<code>Enter</code> قلب · <code>←</code>/<code>→</code> تنقّل · <code>↑</code> عرفتها · <code>↓</code> لم أعرفها · <code>1</code>-<code>4</code> تقييم · <code>S</code> نطق · <code>Ctrl+Z</code> تراجع
     </p>
   </div>
 
@@ -209,10 +260,14 @@ textarea{
       <button class="btn bad" id="resetAll" type="button">🗑️ تصفير كل التقدم</button>
     </div>
     <input type="file" id="importFile" accept="application/json,.json" class="sr" aria-hidden="true" tabindex="-1">
-    <div class="msg" id="msg" aria-live="polite"></div>
+    <div class="msg" id="msg"></div>
     <textarea id="ta" style="display:none" readonly aria-label="نص للنسخ اليدوي"></textarea>
   </div>
 
+  <p class="foot">
+    <b>SRS:</b> التطبيق يستخدم نظام تكرار متباعد مصغّر (SM-2) مع خطوات تعلّم (Learning Steps) للبطاقات الجديدة، وحدّ يومي للجديدة.
+    استخدم زر «⏰ المستحقة فقط» لمراجعة ما حان وقته. الزمن المعروض تحت كل زر هو موعد المراجعة القادم.
+  </p>
   <p class="foot">
     ملاحظات: أسماء الأشخاص والأشكال (n) مثل <span dir="ltr">de(n)</span> كما وردت في الشرائح.
     البطاقات المعلّمة «قواعد» ملخصات سريعة، والشرح الكامل في الدرس نفسه.
@@ -220,16 +275,10 @@ textarea{
   </p>
 </div>
 
-<div id="toast" aria-hidden="true"><span id="toastMsg"></span></div>
+<div id="toast" role="status"><span id="toastMsg"></span></div>
 
-<script>
-(function(){
-"use strict";
-
-/* ============================================================
-   البيانات — مأخوذة حرفياً من شرائح الدروس
-   ============================================================ */
-const D={"lessons": [{"n": 28, "stars": 5, "title": "Biller beschreiwen"}, {"n": 29, "stars": 4, "title": "D’Famill"}, {"n": 12, "stars": 3, "title": "De Beruff"}, {"n": 15, "stars": 3, "title": "RDV beim Dokter"}, {"n": 20, "stars": 3, "title": "Akafen"}, {"n": 24, "stars": 3, "title": "Reesen"}, {"n": 33, "stars": 3, "title": "Kachen an Iessen"}, {"n": 35, "stars": 3, "title": "D’Wieder"}, {"n": 22, "stars": 3, "title": "Akkusativ & Dativ"}, {"n": 7, "stars": 3, "title": "D’Auer"}, {"n": 6, "stars": 3, "title": "N-Reegel, Verben, Zuelen"}, {"n": 27, "stars": 3, "title": "De Conditionnel"}, {"n": 2, "stars": 3, "title": "Wou wunns du? · Sproochen"}, {"n": 5, "stars": 3, "title": "Vu wou kënns du? · reegelméisseg Verben"}, {"n": 10, "stars": 3, "title": "Adjectifs · fir ze"}, {"n": 11, "stars": 3, "title": "Prononciation"}, {"n": 16, "stars": 3, "title": "Possessifs · Ordre des mots · Zänndokter"}, {"n": 17, "stars": 3, "title": "De Passé"}, {"n": 21, "stars": 3, "title": "Futur · Komparativ · Kiné"}, {"n": 26, "stars": 3, "title": "Exercicer I"}, {"n": 34, "stars": 3, "title": "Exercicer II"}, {"n": 3, "stars": 2, "title": "Hunn/Sinn · Artikelen"}, {"n": 4, "stars": 2, "title": "Froewierder · onbestëmmt Artikelen · Nee/Net"}, {"n": 8, "stars": 2, "title": "Déplacement vs Position"}, {"n": 13, "stars": 2, "title": "Imperativ · Keen/Keng · Preferenzen"}, {"n": 14, "stars": 2, "title": "Plural · Riets/Lénks"}, {"n": 18, "stars": 2, "title": "Mat Kanner schaffen"}, {"n": 19, "stars": 2, "title": "Adverbes de fréquence · eréischt"}, {"n": 25, "stars": 2, "title": "'Et' · Onperséinlech Verben · Kleeder"}, {"n": 31, "stars": 2, "title": "Impfungen"}, {"n": 32, "stars": 2, "title": "Modalverben · Renforcer un adjectif"}, {"n": 37, "stars": 2, "title": "Relativsätz I"}, {"n": 38, "stars": 2, "title": "Auto fueren"}, {"n": 1, "stars": 1, "title": "Sech virstellen"}, {"n": 9, "stars": 1, "title": "Chrëschtdag"}, {"n": 23, "stars": 1, "title": "Lieseck: Cosimo Suglia"}, {"n": 30, "stars": 1, "title": "Lieseck: Madam Delarü"}, {"n": 36, "stars": 1, "title": "Lieseck: d'Melusina"}], "cards": [{"l": 28, "k": "v", "lb": "karéiert", "fr": "à carreaux"},
+<script type="application/json" id="appData">
+{"lessons": [{"n": 28, "stars": 5, "title": "Biller beschreiwen"}, {"n": 29, "stars": 4, "title": "D’Famill"}, {"n": 12, "stars": 3, "title": "De Beruff"}, {"n": 15, "stars": 3, "title": "RDV beim Dokter"}, {"n": 20, "stars": 3, "title": "Akafen"}, {"n": 24, "stars": 3, "title": "Reesen"}, {"n": 33, "stars": 3, "title": "Kachen an Iessen"}, {"n": 35, "stars": 3, "title": "D’Wieder"}, {"n": 22, "stars": 3, "title": "Akkusativ & Dativ"}, {"n": 7, "stars": 3, "title": "D’Auer"}, {"n": 6, "stars": 3, "title": "N-Reegel, Verben, Zuelen"}, {"n": 27, "stars": 3, "title": "De Conditionnel"}, {"n": 2, "stars": 3, "title": "Wou wunns du? · Sproochen"}, {"n": 5, "stars": 3, "title": "Vu wou kënns du? · reegelméisseg Verben"}, {"n": 10, "stars": 3, "title": "Adjectifs · fir ze"}, {"n": 11, "stars": 3, "title": "Prononciation"}, {"n": 16, "stars": 3, "title": "Possessifs · Ordre des mots · Zänndokter"}, {"n": 17, "stars": 3, "title": "De Passé"}, {"n": 21, "stars": 3, "title": "Futur · Komparativ · Kiné"}, {"n": 26, "stars": 3, "title": "Exercicer I"}, {"n": 34, "stars": 3, "title": "Exercicer II"}, {"n": 3, "stars": 2, "title": "Hunn/Sinn · Artikelen"}, {"n": 4, "stars": 2, "title": "Froewierder · onbestëmmt Artikelen · Nee/Net"}, {"n": 8, "stars": 2, "title": "Déplacement vs Position"}, {"n": 13, "stars": 2, "title": "Imperativ · Keen/Keng · Preferenzen"}, {"n": 14, "stars": 2, "title": "Plural · Riets/Lénks"}, {"n": 18, "stars": 2, "title": "Mat Kanner schaffen"}, {"n": 19, "stars": 2, "title": "Adverbes de fréquence · eréischt"}, {"n": 25, "stars": 2, "title": "'Et' · Onperséinlech Verben · Kleeder"}, {"n": 31, "stars": 2, "title": "Impfungen"}, {"n": 32, "stars": 2, "title": "Modalverben · Renforcer un adjectif"}, {"n": 37, "stars": 2, "title": "Relativsätz I"}, {"n": 38, "stars": 2, "title": "Auto fueren"}, {"n": 1, "stars": 1, "title": "Sech virstellen"}, {"n": 9, "stars": 1, "title": "Chrëschtdag"}, {"n": 23, "stars": 1, "title": "Lieseck: Cosimo Suglia"}, {"n": 30, "stars": 1, "title": "Lieseck: Madam Delarü"}, {"n": 36, "stars": 1, "title": "Lieseck: d'Melusina"}], "cards": [{"l": 28, "k": "v", "lb": "karéiert", "fr": "à carreaux"},
 {"l": 28, "k": "v", "lb": "gesträift", "fr": "rayé"},
 {"l": 28, "k": "v", "lb": "geblummelt / geblummelegt", "fr": "à motif de fleurs"},
 {"l": 28, "k": "v", "lb": "den Tallekeschong (m), d’Tallekeschong", "fr": "la chaussure à talon, les chaussures à talon"},
@@ -1327,7 +1376,7 @@ const D={"lessons": [{"n": 28, "stars": 5, "title": "Biller beschreiwen"}, {"n":
 {"l": 13, "k": "g", "lb": "Impératif pluriel : radical + t", "fr": "lafen → laaft · schwätzen → schwätzt"},
 {"l": 13, "k": "g", "lb": "Exceptions : sinn → sief/sidd · goen → géi/gitt · ginn → gëff/gitt · stoen → sto/stitt", "fr": "verbes irréguliers à l’impératif"},
 {"l": 13, "k": "g", "lb": "keen/keng = « pas de », aussi « personne »/« aucun » : masc. keen · fém. keng · neutre kee(n) · pluriel keng", "fr": "Kee Geschäft ass op. · Keen huet Loscht."},
-{"l": 13, "k": "g", "lb": "gär (aimer) < léiwer (préférer, comparatif) < am léifsten (préféré, superlatif)", "fr": "Ech hu gär Schockela. · Ech hu léiwer Kamellen. · Ech hunn am léifste Glace."},
+{"l": 13, "k": "g", "lb": "gär (aimer) \u003c léiwer (préférer, comparatif) \u003c am léifsten (préféré, superlatif)", "fr": "Ech hu gär Schockela. · Ech hu léiwer Kamellen. · Ech hunn am léifste Glace."},
 {"l": 13, "k": "p", "lb": "Schwätz/Schwätzt net esou haart!", "fr": "Ne parle/parlez pas aussi fort !"},
 {"l": 13, "k": "p", "lb": "Géi/Gitt an de Kino!", "fr": "Va/Allez au cinéma !"},
 {"l": 13, "k": "p", "lb": "Fuer/Fuert mam Zuch!", "fr": "Prends/Prenez le train !"},
@@ -1665,14 +1714,51 @@ const D={"lessons": [{"n": 28, "stars": 5, "title": "Biller beschreiwen"}, {"n":
 {"l": 36, "k": "v", "lb": "de Fëschschwanz", "fr": "la queue de poisson"},
 {"l": 36, "k": "v", "lb": "hoffen", "fr": "espérer"},
 {"l": 36, "k": "v", "lb": "erléisen", "fr": "sauver, délivrer"}
-]};/* ============================================================
-   الإعدادات والتخزين
+]}
+</script>
+<script>
+(function(){
+"use strict";
+
+/* ============================================================
+   1. تحميل البيانات
    ============================================================ */
-const KEY = "sproochentest-cards-v2";
+function $(id){ return document.getElementById(id); }
+
+let D = null;
+try {
+  D = JSON.parse($("appData").textContent);
+  if (!D || !Array.isArray(D.cards) || !Array.isArray(D.lessons)) throw new Error("بنية البيانات غير صالحة");
+} catch (e) {
+  const w = $("schemaWarn");
+  w.textContent = "تعذّر تحميل بيانات البطاقات: " + e.message;
+  w.classList.add("show");
+  return;
+}
+
+/* ============================================================
+   2. الإعدادات والتخزين
+   ============================================================ */
+const KEY = "sproochentest-cards-v3";
+const OLD_KEY = "sproochentest-cards-v2";
 const KINDS = ["v","p","g"];
 const KN = {v:"مفردات", p:"جمل", g:"قواعد"};
+const MIN = 60000, HOUR = 3600000, DAY = 86400000;
+const MAX_TS = 4102444800000;
 
-/* مفاتيح فريدة للبطاقات (تحصين ضد التكرار) */
+/* === Learning Steps + الحد اليومي === */
+const LEARN_STEPS_MIN   = [10, 1440];   // 10 دقائق → 1 يوم
+const GRAD_IVL_DAYS     = 1;
+const EASY_GRAD_IVL_DAYS = 4;
+const NEW_LIMIT_PER_DAY = 20;
+const UNDO_WINDOW_MS    = 5000;
+
+function fmtStepMin(m){
+  if (m < 60) return m + "د";
+  if (m < 1440) return Math.round(m / 60) + "س";
+  return Math.round(m / 1440) + "ي";
+}
+
 (function assignKeys(){
   const used = new Set();
   D.cards.forEach(function(c, i){
@@ -1687,45 +1773,106 @@ const KN = {v:"مفردات", p:"جمل", g:"قواعد"};
     c.key = k;
   });
 })();
+const validKeys = new Set(D.cards.map(function(c){ return c.key; }));
 
-/* فهرس سريع: الدرس → بطاقاته */
 const byLesson = {};
 D.cards.forEach(function(c){ (byLesson[c.l] = byLesson[c.l] || []).push(c); });
-
 const lessonNums = new Set(D.lessons.map(function(l){ return l.n; }));
 
-/* الحالة */
 const st = {
   known: {},
+  srs: {},
   dir: "lb",
   hide: false,
+  due: false,
   mode: "card",
   theme: "auto",
   q: "",
   selL: null,
-  selK: null
+  selK: null,
+  daily: { date: "", newCount: 0 },
+  lastAction: null
 };
 
-try {
-  const raw = localStorage.getItem(KEY);
-  if (raw) {
+let storageOk = true;
+let migrated = false;
+
+function num(x, lo, hi, def){
+  x = +x;
+  if (!isFinite(x)) return def;
+  return Math.min(hi, Math.max(lo, x));
+}
+
+function normalize(s){
+  return String(s).toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function todayStr(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
+  return y + "-" + m + "-" + day;
+}
+
+function cleanSrs(e){
+  if (!e || typeof e !== "object") return null;
+  return {
+    ease:   num(e.ease, 1.3, 3.5, 2.5),
+    ivl:    num(e.ivl, 0, 3650, 0),
+    due:    num(e.due, 0, MAX_TS, 0),
+    reps:   Math.round(num(e.reps, 0, 100000, 0)),
+    lapses: Math.round(num(e.lapses, 0, 100000, 0)),
+    last:   num(e.last, 0, MAX_TS, 0),
+    step:   Math.round(num(e.step, 0, LEARN_STEPS_MIN.length, 0))
+  };
+}
+
+function readStore(key){
+  let raw = null;
+  try { raw = localStorage.getItem(key); }
+  catch (e) { storageOk = false; return null; }
+  if (!raw) return null;
+  try {
     const s = JSON.parse(raw);
-    if (s && typeof s === "object") {
-      if (s.known && typeof s.known === "object") st.known = s.known;
-      if (typeof s.dir === "string") st.dir = s.dir;
-      if (typeof s.hide === "boolean") st.hide = s.hide;
-      if (typeof s.mode === "string") st.mode = s.mode;
-      if (typeof s.theme === "string") st.theme = s.theme;
-      if (typeof s.q === "string") st.q = s.q;
-      if (Array.isArray(s.selL)) st.selL = s.selL;
-      if (Array.isArray(s.selK)) st.selK = s.selK;
-    }
+    return (s && typeof s === "object") ? s : null;
+  } catch (e) { return null; }
+}
+
+(function loadState(){
+  let s = readStore(KEY);
+  if (!s) {
+    const old = readStore(OLD_KEY);
+    if (old) { s = old; migrated = true; }
   }
-} catch (e) { /* تجاهل */ }
+  if (!s) return;
+  if (s.known && typeof s.known === "object" && !Array.isArray(s.known)) {
+    Object.keys(s.known).forEach(function(k){ if (s.known[k]) st.known[k] = true; });
+  }
+  if (s.srs && typeof s.srs === "object" && !Array.isArray(s.srs)) {
+    Object.keys(s.srs).forEach(function(k){
+      const e = cleanSrs(s.srs[k]);
+      if (e) st.srs[k] = e;
+    });
+  }
+  if (typeof s.dir === "string") st.dir = s.dir === "fr" ? "fr" : "lb";
+  if (typeof s.hide === "boolean") st.hide = s.hide;
+  if (typeof s.due === "boolean") st.due = s.due;
+  if (typeof s.mode === "string") st.mode = s.mode === "list" ? "list" : "card";
+  if (typeof s.theme === "string") st.theme = ["auto","light","dark"].indexOf(s.theme) !== -1 ? s.theme : "auto";
+  if (typeof s.q === "string") st.q = s.q;
+  if (Array.isArray(s.selL)) st.selL = s.selL;
+  if (Array.isArray(s.selK)) st.selK = s.selK;
+  if (s.daily && typeof s.daily === "object" &&
+      typeof s.daily.date === "string" && typeof s.daily.newCount === "number") {
+    st.daily = { date: s.daily.date, newCount: Math.max(0, Math.round(s.daily.newCount)) };
+  }
+})();
 
 let selL = new Set(
   Array.isArray(st.selL) ? st.selL.filter(function(n){ return lessonNums.has(n); })
-                        : D.lessons.map(function(l){ return l.n; })
+                         : D.lessons.map(function(l){ return l.n; })
 );
 let selK = new Set(
   Array.isArray(st.selK) ? st.selK.filter(function(k){ return KINDS.indexOf(k) !== -1; })
@@ -1738,15 +1885,29 @@ let flipped = false;
 let chipRefs = [];
 let lastSwipe = 0;
 
-/* أدوات مساعدة */
-const $ = function(id){ return document.getElementById(id); };
+/* ============================================================
+   3. أدوات عامة
+   ============================================================ */
+function showWarn(msg){
+  const w = $("schemaWarn");
+  w.textContent = msg;
+  w.classList.add("show");
+}
+function hideWarn(){
+  const w = $("schemaWarn");
+  w.textContent = "";
+  w.classList.remove("show");
+}
 
 function save(){
   try {
     st.selL = Array.from(selL);
     st.selK = Array.from(selK);
     localStorage.setItem(KEY, JSON.stringify(st));
-  } catch (e) { /* التخزين ممتلئ أو محجوب */ }
+    if (!storageOk) { storageOk = true; checkSchema(); }
+  } catch (e) {
+    if (storageOk) { storageOk = false; checkSchema(); }
+  }
 }
 
 let toastTimer = null;
@@ -1758,7 +1919,268 @@ function toast(msg){
   toastTimer = setTimeout(function(){ el.classList.remove("show"); }, 2200);
 }
 
-/* المظهر */
+function checkSchema(){
+  let orphans = 0;
+  Object.keys(st.known).forEach(function(k){ if (!validKeys.has(k)) orphans++; });
+  Object.keys(st.srs).forEach(function(k){ if (!validKeys.has(k) && !(k in st.known)) orphans++; });
+  if (!storageOk) {
+    showWarn("⚠️ التخزين المحلي محجوب أو ممتلئ: لن يُحفظ تقدمك. استخدم «تصدير التقدم».");
+  } else if (orphans > 0) {
+    showWarn("ℹ️ يوجد " + orphans + " سجل محفوظ لا يطابق أي بطاقة حالية.");
+  } else {
+    hideWarn();
+  }
+}
+
+/* ============================================================
+   4. SRS + Learning Steps
+   ============================================================ */
+const RATING = ["لم أعرفها", "صعب", "عرفتها", "سهل"];
+
+function startOfDay(t){ const d = new Date(t); d.setHours(0,0,0,0); return d; }
+function addDays(t, n){ const d = startOfDay(t); d.setDate(d.getDate() + n); return d.getTime(); }
+
+function hash(s){
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function seedSrs(key, now){
+  return {
+    ease: 2.5, ivl: 3, due: addDays(now, 1 + hash(key) % 7),
+    reps: 1, lapses: 0, last: now,
+    step: LEARN_STEPS_MIN.length
+  };
+}
+
+function ensureSeeds(){
+  const now = Date.now();
+  let added = 0;
+  D.cards.forEach(function(c){
+    if (st.known[c.key] && !st.srs[c.key]) { st.srs[c.key] = seedSrs(c.key, now); added++; }
+  });
+  return added;
+}
+
+function fmtIvl(days){
+  if (days < 1) return Math.max(1, Math.round(days * 24)) + "س";
+  if (days < 30) return Math.round(days) + "ي";
+  if (days < 365) return Math.round(days / 30) + "ش";
+  return Math.round(days / 365) + " سنة";
+}
+function fmtDelta(ms){
+  if (ms < HOUR) return Math.max(1, Math.round(ms / MIN)) + "د";
+  if (ms < DAY) return Math.round(ms / HOUR) + "س";
+  return Math.round(ms / DAY) + "ي";
+}
+
+/* schedule مع Learning Steps */
+function schedule(entry, r, now){
+  const e = entry ? Object.assign({}, entry) : {
+    ease: 2.5, ivl: 0, due: 0, reps: 0, lapses: 0, last: 0, step: 0
+  };
+  if (typeof e.step !== "number" || e.step < 0) e.step = 0;
+  let label, dueMs;
+
+  const inLearning = e.step < LEARN_STEPS_MIN.length;
+
+  if (inLearning) {
+    const step = e.step;
+    if (r === 0) {
+      e.lapses += 1;
+      e.ease = Math.max(1.3, e.ease - 0.2);
+      e.step = 0;
+      e.ivl = 0;
+      dueMs = now + LEARN_STEPS_MIN[0] * MIN;
+      label = fmtStepMin(LEARN_STEPS_MIN[0]);
+    } else if (r === 1) {
+      const currMin = LEARN_STEPS_MIN[step];
+      const hardMin = Math.max(currMin + 1, Math.round(currMin * 1.5));
+      dueMs = now + hardMin * MIN;
+      label = fmtStepMin(hardMin);
+    } else if (r === 2) {
+      e.reps += 1;
+      e.step = step + 1;
+      if (e.step >= LEARN_STEPS_MIN.length) {
+        e.ivl = GRAD_IVL_DAYS;
+        dueMs = addDays(now, GRAD_IVL_DAYS);
+        label = GRAD_IVL_DAYS + "ي";
+      } else {
+        dueMs = now + LEARN_STEPS_MIN[e.step] * MIN;
+        label = fmtStepMin(LEARN_STEPS_MIN[e.step]);
+      }
+    } else {
+      e.reps += 1;
+      e.step = LEARN_STEPS_MIN.length;
+      e.ivl = EASY_GRAD_IVL_DAYS;
+      e.ease = Math.min(3.5, e.ease + 0.15);
+      dueMs = addDays(now, EASY_GRAD_IVL_DAYS);
+      label = EASY_GRAD_IVL_DAYS + "ي";
+    }
+  } else {
+    const reps = e.reps;
+    if (r === 0) {
+      e.lapses += 1;
+      e.ease = Math.max(1.3, e.ease - 0.2);
+      e.step = 0;
+      e.ivl = 0;
+      e.reps = 0;
+      dueMs = now + LEARN_STEPS_MIN[0] * MIN;
+      label = fmtStepMin(LEARN_STEPS_MIN[0]);
+    } else if (r === 1) {
+      const ivl = Math.max(e.ivl + 1, Math.round(e.ivl * 1.2));
+      e.ivl = Math.min(365, ivl);
+      e.ease = Math.max(1.3, e.ease - 0.15);
+      e.reps = reps + 1;
+      dueMs = addDays(now, e.ivl);
+      label = fmtIvl(e.ivl);
+    } else if (r === 2) {
+      const ivl = Math.max(e.ivl + 1, Math.round(e.ivl * e.ease));
+      e.ivl = Math.min(365, ivl);
+      e.reps = reps + 1;
+      dueMs = addDays(now, e.ivl);
+      label = fmtIvl(e.ivl);
+    } else {
+      const ivl = Math.max(e.ivl + 1, Math.round(e.ivl * e.ease * 1.3));
+      e.ivl = Math.min(365, ivl);
+      e.ease = Math.min(3.5, e.ease + 0.15);
+      e.reps = reps + 1;
+      dueMs = addDays(now, e.ivl);
+      label = fmtIvl(e.ivl);
+    }
+  }
+  e.due = dueMs;
+  e.last = now;
+  return { entry: e, label: label };
+}
+
+function isDue(c, now){
+  const e = st.srs[c.key];
+  return !e || e.due <= now;
+}
+
+function countNewToday(){
+  return st.daily.date === todayStr() ? st.daily.newCount : 0;
+}
+function bumpNewToday(){
+  const t = todayStr();
+  if (st.daily.date !== t) { st.daily = { date: t, newCount: 0 }; }
+  st.daily.newCount += 1;
+}
+
+function updateSrsStat(){
+  const el = $("srsStat");
+  const now = Date.now();
+  const p = pool();
+  let due = 0, fresh = 0, sched = 0;
+  for (let i = 0; i < p.length; i++) {
+    const e = st.srs[p[i].key];
+    if (!e) fresh++;
+    else if (e.due <= now) due++;
+    else sched++;
+  }
+  el.textContent = "";
+  function part(label, n){
+    el.appendChild(document.createTextNode(label + " "));
+    const b = document.createElement("b");
+    b.textContent = String(n);
+    el.appendChild(b);
+  }
+  part("⏰ مستحق:", due + fresh);
+  el.appendChild(document.createTextNode(" · "));
+  part("🆕 جديدة اليوم:", countNewToday() + "/" + NEW_LIMIT_PER_DAY);
+  el.appendChild(document.createTextNode(" (المتاح " + Math.max(0, NEW_LIMIT_PER_DAY - countNewToday()) + ")"));
+  el.appendChild(document.createTextNode(" · "));
+  part("📅 مجدولة:", sched);
+}
+
+/* ============================================================
+   5. الصوت
+   ============================================================ */
+const hasTTS = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
+let voices = [];
+let warnedLb = false;
+
+function loadVoices(){
+  try { voices = window.speechSynthesis.getVoices() || []; } catch (e) { voices = []; }
+}
+if (hasTTS) {
+  loadVoices();
+  try {
+    if (window.speechSynthesis.addEventListener) window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    else window.speechSynthesis.onvoiceschanged = loadVoices;
+  } catch (e) {}
+}
+
+function pickVoice(prefixes){
+  for (let i = 0; i < prefixes.length; i++) {
+    for (let j = 0; j < voices.length; j++) {
+      const l = String(voices[j].lang || "").toLowerCase().replace("_", "-");
+      if (l === prefixes[i] || l.indexOf(prefixes[i] + "-") === 0) return voices[j];
+    }
+  }
+  return null;
+}
+
+function speakable(t){
+  return String(t)
+    .replace(/\s*\((?:m|f|n)\)/g, "")
+    .replace(/\(([^)]*)\)/g, "$1")
+    .replace(/\s*[·→…—]\s*/g, ", ")
+    .replace(/\s*\/\s*/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function shownInfo(c){
+  const front = st.dir === "lb" ? c.lb : c.fr;
+  const back  = st.dir === "lb" ? c.fr : c.lb;
+  return {
+    text: flipped ? back : front,
+    lang: flipped ? (st.dir === "lb" ? "fr" : "lb") : st.dir
+  };
+}
+
+function speakCurrent(){
+  if (!hasTTS || st.mode !== "card" || !order.length) return;
+  const info = shownInfo(D.cards[order[idx]]);
+  const text = speakable(info.text);
+  if (!text) return;
+
+  let voice = null, lang;
+  if (info.lang === "fr") {
+    voice = pickVoice(["fr-fr", "fr"]);
+    lang = voice ? voice.lang : "fr-FR";
+  } else {
+    voice = pickVoice(["lb"]);
+    if (!voice) {
+      voice = pickVoice(["de-de", "de"]);
+      if (!warnedLb) { warnedLb = true; toast("لا يوجد صوت لوكسمبورغي — يُستخدم الألماني"); }
+    }
+    lang = voice ? voice.lang : "de-DE";
+  }
+
+  try {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new window.SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.lang = lang;
+    u.rate = 0.9;
+    u.onerror = function(ev){
+      if (ev && (ev.error === "canceled" || ev.error === "interrupted")) return;
+      toast("تعذّر تشغيل الصوت");
+    };
+    synth.speak(u);
+  } catch (e) {
+    toast("تعذّر تشغيل الصوت");
+  }
+}
+
+/* ============================================================
+   6. المظهر والتصفية
+   ============================================================ */
 const THEMES = ["auto","light","dark"];
 const THEME_LABEL = {auto:"🎨 تلقائي", light:"☀️ فاتح", dark:"🌙 داكن"};
 
@@ -1767,24 +2189,28 @@ function applyTheme(){
   if (st.theme === "auto") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", st.theme);
   $("themeBtn").textContent = THEME_LABEL[st.theme];
-  $("themeBtn").setAttribute("aria-label", "المظهر الحالي: " + THEME_LABEL[st.theme] + " — اضغط للتبديل");
+  $("themeBtn").setAttribute("aria-label", "المظهر: " + THEME_LABEL[st.theme]);
+  const isDark =
+    (st.theme === "dark") ||
+    (st.theme === "auto" && window.matchMedia &&
+     window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = isDark ? "#0f1720" : "#b5762a";
 }
 
-/* تصفية */
 function pool(){
-  const q = st.q.trim().toLowerCase();
+  const q = normalize(st.q.trim());
   return D.cards.filter(function(c){
     if (!selL.has(c.l)) return false;
     if (!selK.has(c.k)) return false;
     if (q) {
-      const hay = (c.lb + " " + c.fr).toLowerCase();
+      const hay = normalize(c.lb + " " + c.fr + " " + c.l);
       if (hay.indexOf(q) === -1) return false;
     }
     return true;
   });
 }
 
-/* الشرائح (chips) */
 function buildChips(){
   const lr = $("lessonRow");
   lr.innerHTML = "";
@@ -1803,6 +2229,7 @@ function buildChips(){
 
     const stars = document.createElement("span");
     stars.textContent = " ⭐".repeat(l.stars);
+    stars.setAttribute("aria-hidden", "true");
 
     const cnt = document.createElement("span");
     cnt.className = "cnt";
@@ -1859,16 +2286,41 @@ function updateTopButtons(){
   $("dirBtn").setAttribute("aria-label", $("dirBtn").textContent);
   $("hideKnown").textContent = st.hide ? "🙈 إخفاء المعروف: نعم" : "👁️ إخفاء المعروف: لا";
   $("hideKnown").setAttribute("aria-pressed", st.hide ? "true" : "false");
+  $("dueBtn").textContent = st.due ? "⏰ المستحقة فقط: نعم" : "⏰ المستحقة فقط: لا";
+  $("dueBtn").setAttribute("aria-pressed", st.due ? "true" : "false");
   $("modeBtn").textContent = st.mode === "card" ? "📋 عرض: بطاقات" : "📊 عرض: قائمة";
   $("modeBtn").setAttribute("aria-pressed", st.mode === "list" ? "true" : "false");
 }
 
 function rebuild(reset){
   const p = pool();
-  const vis = st.hide ? p.filter(function(c){ return !st.known[c.key]; }) : p;
+  const now = Date.now();
+  let vis;
+  if (st.due) vis = p.filter(function(c){ return isDue(c, now); });
+  else vis = st.hide ? p.filter(function(c){ return !st.known[c.key]; }) : p;
+
+  /* حد يومي للجديدة — فقط في وضع «المستحقة فقط» */
+  if (st.due) {
+    const remaining = Math.max(0, NEW_LIMIT_PER_DAY - countNewToday());
+    const older = [];
+    const newOnes = [];
+    for (let i = 0; i < vis.length; i++){
+      if (st.srs[vis[i].key]) older.push(vis[i]);
+      else newOnes.push(vis[i]);
+    }
+    vis = older.concat(newOnes.slice(0, remaining));
+  }
+
   const ids = new Set(vis.map(function(c){ return c.id; }));
 
   if (reset || order.length === 0){
+    if (st.due) {
+      vis = vis.slice().sort(function(a, b){
+        const da = st.srs[a.key] ? st.srs[a.key].due : 0;
+        const db = st.srs[b.key] ? st.srs[b.key].due : 0;
+        return da - db;
+      });
+    }
     order = vis.map(function(c){ return c.id; });
   } else {
     const prev = new Set(order);
@@ -1905,6 +2357,7 @@ function updateBar(){
     order.length + " · الإجمالي " + totalKn + "/" + D.cards.length;
 
   updateChipCounts();
+  updateSrsStat();
 }
 
 function render(){
@@ -1915,19 +2368,33 @@ function render(){
   if (!cardMode){ renderList(); return; }
 
   const el = $("card");
+  const rateBtns = $("srsRow").querySelectorAll("button");
 
   if (!order.length){
     el.className = "card empty";
-    el.innerHTML = '<div class="txt emptyTxt">لا توجد بطاقات في هذه المجموعة 🎉</div>';
-    el.setAttribute("aria-label", "لا توجد بطاقات في هذه المجموعة");
+    el.textContent = "";
+    const d = document.createElement("div");
+    d.className = "txt emptyTxt";
+    d.textContent = st.due ? "لا توجد بطاقات مستحقة الآن 🎉" : "لا توجد بطاقات في هذه المجموعة 🎉";
+    el.appendChild(d);
+    el.setAttribute("aria-label", d.textContent);
+    $("audioBtn").hidden = true;
+    for (let i = 0; i < rateBtns.length; i++) rateBtns[i].disabled = true;
+    for (let r = 0; r < 4; r++) $("ivl" + r).textContent = "";
     return;
   }
 
+  for (let i = 0; i < rateBtns.length; i++) rateBtns[i].disabled = !flipped;
+  $("audioBtn").hidden = !hasTTS;
+
   const c = D.cards[order[idx]];
-  const front = st.dir === "lb" ? c.lb : c.fr;
-  const back  = st.dir === "lb" ? c.fr : c.lb;
-  const shown = flipped ? back : front;
-  const shownLang = flipped ? (st.dir === "lb" ? "fr" : "lb") : st.dir;
+  const info = shownInfo(c);
+  const shown = info.text;
+
+  const e = st.srs[c.key] || null;
+  const now = Date.now();
+  for (let r = 0; r < 4; r++) $("ivl" + r).textContent = schedule(e, r, now).label;
+  const status = !e ? " · جديدة" : (e.due <= now ? " · مستحقة" : "");
 
   el.className = "card" + (flipped ? " back" : "");
   el.setAttribute("aria-label",
@@ -1935,17 +2402,29 @@ function render(){
     " — درس " + c.l + "، " + KN[c.k] + "، البطاقة " + (idx + 1) + " من " + order.length);
 
   el.innerHTML =
-    '<div class="tag">درس ' + c.l + " · " + KN[c.k] + " · " + (idx + 1) + "/" + order.length + "</div>" +
+    '<div class="tag">درس ' + c.l + " · " + KN[c.k] + " · " + (idx + 1) + "/" + order.length + status + "</div>" +
     '<div class="txt"></div>' +
-    '<div class="hint">' + (flipped ? "اضغط للعودة إلى السؤال" : "اضغط لقلب البطاقة") + "</div>";
+    '<div class="hint" aria-hidden="true">' +
+      (flipped ? "اضغط للعودة إلى السؤال" : "اضغط لقلب البطاقة") +
+    "</div>";
 
   const t = el.querySelector(".txt");
   let cls = "txt";
   if (shown.length > 90) cls += " long";
   else if (shown.length > 50) cls += " mid";
   t.className = cls;
-  t.lang = shownLang;
+  t.lang = info.lang;
   t.textContent = shown;
+}
+
+function setKnownFromList(c, on){
+  if (on) {
+    st.known[c.key] = true;
+    if (!st.srs[c.key]) st.srs[c.key] = seedSrs(c.key, Date.now());
+  } else {
+    delete st.known[c.key];
+    delete st.srs[c.key];
+  }
 }
 
 function renderList(){
@@ -1984,7 +2463,7 @@ function renderList(){
     btn.setAttribute("aria-label", st.known[c.key] ? "إزالة علامة «معروفة»" : "وضع علامة «معروفة»");
     btn.addEventListener("click", function(ev){
       ev.stopPropagation();
-      if (st.known[c.key]) delete st.known[c.key]; else st.known[c.key] = true;
+      setKnownFromList(c, !st.known[c.key]);
       save();
       const k = !!st.known[c.key];
       tr.classList.toggle("known", k);
@@ -2007,7 +2486,9 @@ function renderList(){
   tbl.appendChild(frag);
 }
 
-/* التنقل والتفاعل */
+/* ============================================================
+   7. التنقل والتقييم + Undo
+   ============================================================ */
 function flip(){
   if (!order.length) return;
   flipped = !flipped;
@@ -2021,14 +2502,91 @@ function go(d){
   render();
 }
 
-function markKnown(){
-  if (!order.length) return;
-  const c = D.cards[order[idx]];
-  if (st.known[c.key]) { go(1); return; }
-  st.known[c.key] = true;
-  save();
+let undoTimer = null;
 
-  if (st.hide){
+function showUndoButton(){
+  const btn = $("undoBtn");
+  if (!btn) return;
+  btn.hidden = false;
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = setTimeout(function(){
+    btn.hidden = true;
+    st.lastAction = null;
+  }, UNDO_WINDOW_MS);
+}
+
+function hideUndoButton(){
+  const btn = $("undoBtn");
+  if (btn) btn.hidden = true;
+  if (undoTimer) clearTimeout(undoTimer);
+  st.lastAction = null;
+}
+
+function undo(){
+  const a = st.lastAction;
+  if (!a) return;
+  if (Date.now() - a.ts > UNDO_WINDOW_MS) return;
+
+  if (a.srs) st.srs[a.cardKey] = a.srs;
+  else delete st.srs[a.cardKey];
+
+  if (a.wasKnown) st.known[a.cardKey] = true;
+  else delete st.known[a.cardKey];
+
+  if (a.wasNewToday) {
+    st.daily.newCount = Math.max(0, st.daily.newCount - 1);
+  }
+
+  if (a.order && a.order.length) order = a.order.slice();
+
+  idx = a.idx;
+  flipped = a.flipped;
+  st.lastAction = null;
+  save();
+  hideUndoButton();
+  updateBar();
+  render();
+  toast("تم التراجع ✓");
+}
+
+function rate(r){
+  if (st.mode !== "card" || !order.length) return;
+  if (!flipped){ toast("اقلب البطاقة أولاً 👆"); return; }
+
+  const c = D.cards[order[idx]];
+  const now = Date.now();
+  const wasNew = !st.srs[c.key] && !st.known[c.key];
+  const res = schedule(st.srs[c.key], r, now);
+
+  st.lastAction = {
+    cardKey: c.key,
+    srs: st.srs[c.key] ? Object.assign({}, st.srs[c.key]) : null,
+    wasKnown: !!st.known[c.key],
+    wasNewToday: wasNew,
+    idx: idx,
+    flipped: flipped,
+    order: order.slice(),
+    ts: now
+  };
+
+  st.srs[c.key] = res.entry;
+  if (r >= 2) st.known[c.key] = true;
+  else if (r === 0) delete st.known[c.key];
+
+  if (wasNew) bumpNewToday();
+
+  save();
+  toast("التقييم: " + RATING[r] + " · المراجعة بعد " + res.label);
+  showUndoButton();
+
+  if (st.due) {
+    const id = order.splice(idx, 1)[0];
+    if (r === 0) order.splice(Math.min(idx + 4, order.length), 0, id);
+    if (idx >= order.length) idx = 0;
+    flipped = false;
+    updateBar();
+    render();
+  } else if (st.hide && r >= 2) {
     order.splice(idx, 1);
     if (idx >= order.length) idx = 0;
     flipped = false;
@@ -2040,14 +2598,9 @@ function markKnown(){
   }
 }
 
-function markUnknown(){
-  if (!order.length) return;
-  const c = D.cards[order[idx]];
-  if (st.known[c.key]){ delete st.known[c.key]; save(); updateBar(); }
-  go(1);
-}
-
-/* الربط بالأحداث */
+/* ============================================================
+   8. ربط الأحداث
+   ============================================================ */
 const cardEl = $("card");
 
 cardEl.addEventListener("click", function(){
@@ -2058,14 +2611,30 @@ cardEl.addEventListener("click", function(){
 cardEl.addEventListener("keydown", function(e){
   if (e.key === " " || e.key === "Enter"){
     e.preventDefault();
+    e.stopPropagation();
     flip();
   }
 });
 
 $("next").addEventListener("click", function(){ go(1); });
 $("prev").addEventListener("click", function(){ go(-1); });
-$("yep").addEventListener("click", markKnown);
-$("nope").addEventListener("click", markUnknown);
+$("audioBtn").addEventListener("click", speakCurrent);
+
+(function bindUndo(){
+  const btn = $("undoBtn");
+  if (!btn) return;
+  btn.hidden = true;
+  btn.addEventListener("click", undo);
+})();
+
+(function bindRating(){
+  const btns = $("srsRow").querySelectorAll("button[data-rating]");
+  for (let i = 0; i < btns.length; i++) {
+    btns[i].addEventListener("click", function(ev){
+      rate(parseInt(ev.currentTarget.getAttribute("data-rating"), 10));
+    });
+  }
+})();
 
 $("shuf").addEventListener("click", function(){
   for (let i = order.length - 1; i > 0; i--){
@@ -2080,17 +2649,21 @@ $("shuf").addEventListener("click", function(){
 $("resetGroup").addEventListener("click", function(){
   const p = pool();
   if (!p.length){ toast("المجموعة فارغة"); return; }
-  if (!confirm("تصفير تقدم " + p.length + " بطاقة في المجموعة الحالية؟")) return;
-  p.forEach(function(c){ delete st.known[c.key]; });
+  if (!confirm("تصفير تقدم وجدولة مراجعة " + p.length + " بطاقة في المجموعة الحالية؟")) return;
+  p.forEach(function(c){ delete st.known[c.key]; delete st.srs[c.key]; });
   save();
   rebuild(true);
   toast("تم تصفير المجموعة");
 });
 
 $("resetAll").addEventListener("click", function(){
-  if (!confirm("تصفير كل التقدم لجميع البطاقات؟ لا يمكن التراجع.")) return;
+  if (!confirm("تصفير كل التقدم وجدولة المراجعة لجميع البطاقات؟ لا يمكن التراجع.")) return;
   st.known = {};
+  st.srs = {};
+  st.daily = { date: "", newCount: 0 };
+  st.lastAction = null;
   save();
+  checkSchema();
   rebuild(true);
   toast("تم تصفير كل التقدم");
 });
@@ -2105,6 +2678,13 @@ $("dirBtn").addEventListener("click", function(){
 
 $("hideKnown").addEventListener("click", function(){
   st.hide = !st.hide;
+  save();
+  updateTopButtons();
+  rebuild(true);
+});
+
+$("dueBtn").addEventListener("click", function(){
+  st.due = !st.due;
   save();
   updateTopButtons();
   rebuild(true);
@@ -2153,11 +2733,20 @@ document.addEventListener("keydown", function(e){
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return;
   if (st.mode !== "card") return;
+
+  /* Ctrl+Z / Cmd+Z — يجب أن يكون قبل فحص modifiers */
+  if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+    e.preventDefault();
+    undo();
+    return;
+  }
+
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch (e.key){
     case " ":
     case "Enter":
+      if (tag === "button") return;
       e.preventDefault();
       flip();
       break;
@@ -2171,11 +2760,19 @@ document.addEventListener("keydown", function(e){
       break;
     case "ArrowUp":
       e.preventDefault();
-      markKnown();
+      rate(2);
       break;
     case "ArrowDown":
       e.preventDefault();
-      markUnknown();
+      rate(0);
+      break;
+    case "1": case "2": case "3": case "4":
+      e.preventDefault();
+      rate(parseInt(e.key, 10) - 1);
+      break;
+    case "s": case "S":
+      e.preventDefault();
+      speakCurrent();
       break;
     default:
       break;
@@ -2206,7 +2803,9 @@ document.addEventListener("keydown", function(e){
   }, { passive: true });
 })();
 
-/* النسخ */
+/* ============================================================
+   9. النسخ
+   ============================================================ */
 async function copyText(t){
   let ok = false;
   if (navigator.clipboard && navigator.clipboard.writeText){
@@ -2229,7 +2828,9 @@ function tsv(){
   for (let i = 0; i < order.length; i++){
     const c = D.cards[order[i]];
     const tag = "sproochentest L" + c.l + " " + KN[c.k];
-    lines.push([c.lb, c.fr, tag].map(function(x){ return String(x).replace(/\t/g, " "); }).join("\t"));
+    lines.push([c.lb, c.fr, tag].map(function(x){
+      return String(x).replace(/[\t\r\n]+/g, " ").trim();
+    }).join("\t"));
   }
   return lines.join("\n");
 }
@@ -2241,7 +2842,7 @@ $("copyCard").addEventListener("click", async function(){
   const ok = await copyText(t);
   $("cardMsg").textContent = ok
     ? "تم نسخ البطاقة ✓ (" + c.lb + " — " + c.fr + ")"
-    : "تعذّر النسخ التلقائي، حدّد النص من المربع أدناه وانسخه يدوياً";
+    : "تعذّر النسخ التلقائي";
   if (!ok){
     const ta = $("ta");
     ta.value = t;
@@ -2266,17 +2867,21 @@ $("copy").addEventListener("click", async function(){
     ta.style.display = "block";
     ta.focus();
     ta.select();
-    $("msg").textContent = "تعذّر النسخ التلقائي، حدّد النص أدناه وانسخه (Ctrl/Cmd+C)";
+    $("msg").textContent = "تعذّر النسخ التلقائي";
   }
 });
 
-/* التصدير / الاستيراد */
+/* ============================================================
+   10. التصدير / الاستيراد
+   ============================================================ */
 $("exportBtn").addEventListener("click", function(){
   const payload = {
     app: "sproochentest-cards",
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
-    known: st.known
+    known: st.known,
+    srs: st.srs,
+    daily: st.daily
   };
   try {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -2288,8 +2893,7 @@ $("exportBtn").addEventListener("click", function(){
     a.click();
     a.remove();
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1500);
-    const n = Object.keys(st.known).length;
-    $("msg").textContent = "تم تصدير " + n + " علامة ✓";
+    $("msg").textContent = "تم تصدير " + Object.keys(st.known).length + " علامة و" + Object.keys(st.srs).length + " جدولة ✓";
     toast("تم تصدير التقدم");
   } catch (e) {
     $("msg").textContent = "تعذّر التصدير: " + e.message;
@@ -2308,25 +2912,41 @@ $("importFile").addEventListener("change", function(e){
   r.onload = function(){
     try {
       const d = JSON.parse(r.result);
-      if (!d || !d.known || typeof d.known !== "object") throw new Error("صيغة غير معروفة");
-      const valid = {};
-      D.cards.forEach(function(c){ valid[c.key] = true; });
-      const clean = {};
-      Object.keys(d.known).forEach(function(k){
-        if (Object.prototype.hasOwnProperty.call(valid, k) && d.known[k]) clean[k] = true;
-      });
-      const total = Object.keys(clean).length;
-      if (!total) throw new Error("لا توجد علامات مطابقة لبطاقات هذا التطبيق");
-      const merge = confirm("سيتم استيراد " + total + " علامة.\n\nدمج مع التقدم الحالي؟\n«موافق» = دمج · «إلغاء» = استبدال كامل");
-      if (merge){
-        Object.keys(clean).forEach(function(k){ st.known[k] = true; });
-      } else {
-        st.known = clean;
+      if (!d || typeof d !== "object" || !d.known || typeof d.known !== "object" || Array.isArray(d.known)) {
+        throw new Error("صيغة غير معروفة");
       }
+
+      const cleanKnown = {};
+      const cleanSrsMap = {};
+      Object.keys(d.known).forEach(function(k){
+        if (validKeys.has(k) && d.known[k]) cleanKnown[k] = true;
+      });
+      if (d.srs && typeof d.srs === "object" && !Array.isArray(d.srs)) {
+        Object.keys(d.srs).forEach(function(k){
+          if (!validKeys.has(k)) return;
+          const en = cleanSrs(d.srs[k]);
+          if (en) cleanSrsMap[k] = en;
+        });
+      }
+      const union = new Set(Object.keys(cleanKnown).concat(Object.keys(cleanSrsMap)));
+      if (!union.size) throw new Error("لا توجد علامات مطابقة");
+
+      const merge = confirm("سيتم استيراد " + union.size + " سجل.\n\nدمج مع التقدم الحالي؟\n«موافق» = دمج · «إلغاء» = استبدال كامل");
+      if (merge){
+        Object.keys(cleanKnown).forEach(function(k){ st.known[k] = true; });
+        Object.keys(cleanSrsMap).forEach(function(k){
+          const mine = st.srs[k];
+          if (!mine || cleanSrsMap[k].last > mine.last) st.srs[k] = cleanSrsMap[k];
+        });
+      } else {
+        st.known = cleanKnown;
+        st.srs = cleanSrsMap;
+      }
+      ensureSeeds();
       save();
+      checkSchema();
       rebuild(true);
-      const n = Object.keys(st.known).length;
-      $("msg").textContent = "تم الاستيراد — إجمالي العلامات: " + n;
+      $("msg").textContent = "تم الاستيراد — إجمالي العلامات: " + Object.keys(st.known).length;
       toast("تم الاستيراد ✓");
     } catch (err) {
       $("msg").textContent = "تعذّر قراءة الملف: " + err.message;
@@ -2337,13 +2957,32 @@ $("importFile").addEventListener("change", function(e){
   e.target.value = "";
 });
 
-/* الإقلاع */
+/* ============================================================
+   11. الإقلاع
+   ============================================================ */
 $("totalCards").textContent = String(D.cards.length);
 $("totalLessons").textContent = String(D.lessons.length);
+
+(function probeStorage(){
+  try {
+    localStorage.setItem("__probe__", "1");
+    localStorage.removeItem("__probe__");
+  } catch (e) { storageOk = false; }
+})();
+
+const seeded = ensureSeeds();
+if (migrated || seeded) save();
 
 applyTheme();
 buildChips();
 rebuild(true);
+checkSchema();
+
+if (migrated && Object.keys(st.known).length) {
+  toast("تم ترحيل تقدمك (" + Object.keys(st.known).length + " علامة)");
+}
+
+setInterval(updateSrsStat, 60000);
 
 if (window.matchMedia){
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
