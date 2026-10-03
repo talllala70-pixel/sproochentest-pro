@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data:; media-src blob: data:; connect-src 'self' blob: https://huggingface.co https://*.huggingface.co https://*.hf.co; worker-src 'self' blob:; manifest-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#b5762a">
 <meta name="description" content="بطاقات مراجعة Sproochentest — مفردات، جمل وقواعد من دروسك.">
@@ -168,6 +168,9 @@ textarea{
 #stage .audio-btn:active{transform:scale(.93)}
 #stage .audio-btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 
+/* === Auto-Speak button (Phase 3 - Path E) === */
+#autoSpeakBtn.on{background:var(--accent2);color:var(--onaccent);border-color:var(--accent2);font-weight:700}
+
 /* === Stats === */
 .srs-stat{color:var(--muted);font-size:.82em;text-align:center;margin-top:2px}
 .srs-stat b{color:var(--accent);font-weight:700}
@@ -178,6 +181,12 @@ textarea{
   border-radius:8px;font-size:.8em;margin:6px 0;text-align:center;
 }
 .schema-warn.show{display:block}
+/* === Piper voices box === */
+.ttsbox{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px 12px;margin:8px 0;font-size:.82em;color:var(--muted)}
+.ttsbox .ttsrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+.ttsbox .ttsbar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:6px;display:none}
+.ttsbox .ttsbar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+.ttsbox.busy .ttsbar{display:block}
 @media (prefers-reduced-motion: reduce){
   *{transition:none!important;animation:none!important}
 }
@@ -194,6 +203,7 @@ textarea{
     <button class="btn small" id="dirBtn" type="button"></button>
     <button class="btn small" id="modeBtn" type="button"></button>
     <button class="btn small" id="hideKnown" type="button"></button>
+    <button class="btn small" id="autoSpeakBtn" type="button" aria-pressed="false">🔇 النطق التلقائي: لا</button>
     <button class="btn small" id="dueBtn" type="button" aria-pressed="false">⏰ المستحقة فقط</button>
   </div>
 
@@ -216,6 +226,15 @@ textarea{
   <div class="stat" id="stat"></div>
   <div class="srs-stat" id="srsStat"></div>
   <div class="schema-warn" id="schemaWarn" role="alert"></div>
+
+  <div class="ttsbox" id="ttsBox">
+    <div class="ttsrow">
+      <span id="ttsStatus">🔈 الأصوات المحلية (Piper): …</span>
+      <button class="btn tiny" id="ttsLoad" type="button">⬇️ تحميل الأصوات</button>
+      <button class="btn tiny" id="ttsDel" type="button" hidden>🗑️ حذف</button>
+    </div>
+    <div class="ttsbar" id="ttsBarWrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="ttsBar"></div></div>
+  </div>
 
   <div id="cardView">
     <div id="stage">
@@ -267,6 +286,11 @@ textarea{
   <p class="foot">
     <b>SRS:</b> التطبيق يستخدم نظام تكرار متباعد مصغّر (SM-2) مع خطوات تعلّم (Learning Steps) للبطاقات الجديدة، وحدّ يومي للجديدة.
     استخدم زر «⏰ المستحقة فقط» لمراجعة ما حان وقته. الزمن المعروض تحت كل زر هو موعد المراجعة القادم.
+  </p>
+  <p class="foot" dir="ltr" style="text-align:center">
+    Voices: Piper TTS (<a href="https://github.com/rhasspy/piper" style="color:inherit">rhasspy/piper</a>) —
+    lb_LU-marylux (<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" style="color:inherit">CC BY-NC-SA 4.0</a>, non-commercial) ·
+    fr_FR-tom (AGPLv3) · onnxruntime-web (MIT) · piper-tts-web (MIT)
   </p>
   <p class="foot">
     ملاحظات: أسماء الأشخاص والأشكال (n) مثل <span dir="ltr">de(n)</span> كما وردت في الشرائح.
@@ -1716,6 +1740,7 @@ textarea{
 {"l": 36, "k": "v", "lb": "erléisen", "fr": "sauver, délivrer"}
 ]}
 </script>
+<script src="piper-engine.js"></script>
 <script>
 (function(){
 "use strict";
@@ -1791,7 +1816,8 @@ const st = {
   selL: null,
   selK: null,
   daily: { date: "", newCount: 0 },
-  lastAction: null
+  lastAction: null,
+  autoSpeak: false   /* ← المسار E */
 };
 
 let storageOk = true;
@@ -1862,6 +1888,7 @@ function readStore(key){
   if (typeof s.mode === "string") st.mode = s.mode === "list" ? "list" : "card";
   if (typeof s.theme === "string") st.theme = ["auto","light","dark"].indexOf(s.theme) !== -1 ? s.theme : "auto";
   if (typeof s.q === "string") st.q = s.q;
+  if (typeof s.autoSpeak === "boolean") st.autoSpeak = s.autoSpeak;  /* ← المسار E */
   if (Array.isArray(s.selL)) st.selL = s.selL;
   if (Array.isArray(s.selK)) st.selK = s.selK;
   if (s.daily && typeof s.daily === "object" &&
@@ -2096,7 +2123,7 @@ function updateSrsStat(){
 }
 
 /* ============================================================
-   5. الصوت
+   5. الصوت (محسّن — المسار E)
    ============================================================ */
 const hasTTS = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
 let voices = [];
@@ -2113,16 +2140,57 @@ if (hasTTS) {
   } catch (e) {}
 }
 
-function pickVoice(prefixes){
-  for (let i = 0; i < prefixes.length; i++) {
-    for (let j = 0; j < voices.length; j++) {
-      const l = String(voices[j].lang || "").toLowerCase().replace("_", "-");
-      if (l === prefixes[i] || l.indexOf(prefixes[i] + "-") === 0) return voices[j];
+/**
+ * اختيار الصوت المناسب حسب اللغة
+ * @param {string} lang - رمز اللغة (lb, fr, de)
+ * @returns {SpeechSynthesisVoice|null}
+ */
+function pickVoiceForLang(lang) {
+  if (!voices || !voices.length) return null;
+
+  const langLower = String(lang).toLowerCase();
+
+  if (langLower === "lb") {
+    for (let i = 0; i < voices.length; i++) {
+      const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
+      if (vLang.indexOf("lb") === 0) return voices[i];
+    }
+    const fallbacks = ["de-de", "de-at", "de-ch", "de"];
+    for (let f = 0; f < fallbacks.length; f++) {
+      for (let i = 0; i < voices.length; i++) {
+        const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
+        if (vLang === fallbacks[f] || vLang.indexOf(fallbacks[f] + "-") === 0) {
+          if (!warnedLb) {
+            warnedLb = true;
+            toast("لا يوجد صوت لوكسمبورغي — يُستخدم الألماني");
+          }
+          return voices[i];
+        }
+      }
     }
   }
+
+  if (langLower === "fr") {
+    const fallbacks = ["fr-fr", "fr-ca", "fr-be", "fr"];
+    for (let f = 0; f < fallbacks.length; f++) {
+      for (let i = 0; i < voices.length; i++) {
+        const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
+        if (vLang === fallbacks[f] || vLang.indexOf(fallbacks[f] + "-") === 0) return voices[i];
+      }
+    }
+  }
+
+  for (let i = 0; i < voices.length; i++) {
+    const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
+    if (vLang.indexOf(langLower) === 0) return voices[i];
+  }
+
   return null;
 }
 
+/**
+ * تنظيف النص لجعله قابلاً للنطق
+ */
 function speakable(t){
   return String(t)
     .replace(/\s*\((?:m|f|n)\)/g, "")
@@ -2131,6 +2199,191 @@ function speakable(t){
     .replace(/\s*\/\s*/g, ", ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+/**
+ * تقسيم النص الطويل إلى جمل (Chunking)
+ * المتصفحات لديها حد أقصى للنطق، لذا نقسم النص إلى جمل.
+ * @param {string} text
+ * @param {number} maxChunkLength
+ * @returns {string[]}
+ */
+function chunkifyText(text, maxChunkLength) {
+  maxChunkLength = maxChunkLength || 200;
+  if (!text) return [];
+
+  const sentenceRegex = /[^.!?]+[.!?]*/g;
+  const sentences = text.match(sentenceRegex) || [text];
+
+  const chunks = [];
+  let currentChunk = "";
+
+  for (let s = 0; s < sentences.length; s++) {
+    const trimmed = sentences[s].trim();
+    if (!trimmed) continue;
+
+    if (trimmed.length > maxChunkLength) {
+      const words = trimmed.split(/\s+/);
+      let subChunk = "";
+      for (let w = 0; w < words.length; w++) {
+        const candidate = subChunk ? subChunk + " " + words[w] : words[w];
+        if (candidate.length <= maxChunkLength) {
+          subChunk = candidate;
+        } else {
+          if (subChunk) chunks.push(subChunk.trim());
+          subChunk = words[w];
+        }
+      }
+      if (subChunk) chunks.push(subChunk.trim());
+    } else {
+      const candidate = currentChunk ? currentChunk + " " + trimmed : trimmed;
+      if (candidate.length <= maxChunkLength) {
+        currentChunk = candidate;
+      } else {
+        if (currentChunk) chunks.push(currentChunk.trim());
+        currentChunk = trimmed;
+      }
+    }
+  }
+
+  if (currentChunk) chunks.push(currentChunk.trim());
+
+  return chunks.filter(function(c){ return c.length > 0; });
+}
+
+/**
+ * نطق نص باستخدام طابور speechSynthesis
+ * @param {string} text - النص
+ * @param {string} lang - رمز اللغة (lb, fr)
+ * @param {Object} options - خيارات إضافية (rate, pitch, volume)
+ */
+function speakTextBrowser(text, lang, options) {
+  if (!hasTTS || !text) return;
+
+  const synth = window.speechSynthesis;
+
+  // إلغاء أي نطق سابق لتفريغ الطابور
+  try { synth.cancel(); } catch (e) {}
+
+  const voice = pickVoiceForLang(lang);
+  const chunks = chunkifyText(text, 200);
+
+  if (!chunks.length) return;
+
+  const opts = options || {};
+  const rate = (typeof opts.rate === "number") ? opts.rate : 0.9;
+  const pitch = (typeof opts.pitch === "number") ? opts.pitch : 1.0;
+  const volume = (typeof opts.volume === "number") ? opts.volume : 1.0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const utterance = new SpeechSynthesisUtterance(chunks[i]);
+
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
+    } else {
+      utterance.lang = lang === "fr" ? "fr-FR" : "de-DE";
+    }
+
+    utterance.rate = rate;
+    utterance.pitch = pitch;
+    utterance.volume = volume;
+
+    (function(index){
+      utterance.onerror = function(event){
+        if (event && (event.error === "canceled" || event.error === "interrupted")) return;
+        if (index === chunks.length - 1) toast("تعذّر تشغيل الصوت");
+      };
+    })(i);
+
+    try { synth.speak(utterance); } catch (e) { toast("تعذّر تشغيل الصوت"); return; }
+  }
+}
+
+
+/* ============================================================
+   Piper TTS المحلي (lb: marylux · fr: tom) مع احتياطي speechSynthesis
+   ============================================================ */
+const PL = window.PiperLocal || null;
+const piperOk = !!(PL && PL.supported);
+const canSpeak = piperOk || hasTTS;
+const piperFailed = {};
+let loadingBusy = false;
+
+function mb(n){ return (n / 1048576).toFixed(0); }
+const LANG_NAME = { lb: "لوكسمبورغي", fr: "فرنسي" };
+
+function setTtsProgress(lang, loaded, total, src){
+  const box = $("ttsBox");
+  box.classList.add("busy");
+  const pct = total ? Math.min(100, Math.round(loaded / total * 100)) : 0;
+  $("ttsBar").style.width = (total ? pct : 15) + "%";
+  $("ttsBarWrap").setAttribute("aria-valuenow", String(pct));
+  const where = src === "local" ? "من المجلد المحلي" : (src === "cache" ? "من التخزين" : "تحميل");
+  $("ttsStatus").textContent = "⏳ صوت " + LANG_NAME[lang] + " — " + where + ": " + mb(loaded) + (total ? "/" + mb(total) : "") + " MB" + (total ? " (" + pct + "%)" : "");
+}
+function endTtsProgress(){
+  $("ttsBox").classList.remove("busy");
+  $("ttsBar").style.width = "0";
+  refreshTtsStatus();
+}
+
+async function refreshTtsStatus(){
+  const st = $("ttsStatus"), load = $("ttsLoad"), del = $("ttsDel");
+  if (!piperOk) {
+    st.textContent = "🔈 Piper غير مدعوم في هذا المتصفح — يُستخدم صوت المتصفح";
+    load.hidden = true; del.hidden = true;
+    return;
+  }
+  let lb = false, fr = false;
+  try { lb = await PL.isCached("lb"); fr = await PL.isCached("fr"); } catch (e) {}
+  st.textContent = "🔈 Piper: لوكسمبورغي " + (lb ? "✓" : "✗") + " · فرنسي " + (fr ? "✓" : "✗") +
+    ((lb && fr) ? " — يعمل بدون إنترنت" : "");
+  load.hidden = (lb && fr);
+  del.hidden = !(lb || fr);
+}
+
+async function preloadVoices(){
+  if (!piperOk || loadingBusy) return;
+  loadingBusy = true;
+  $("ttsLoad").disabled = true;
+  try {
+    const langs = ["lb", "fr"];
+    for (let i = 0; i < langs.length; i++) {
+      const lg = langs[i];
+      piperFailed[lg] = false;
+      await PL.prepare(lg, function(l, t, src){ setTtsProgress(lg, l, t, src); });
+    }
+    toast("تم تجهيز الأصوات ✓");
+  } catch (e) {
+    toast("تعذّر تحميل الأصوات — تحقق من الاتصال أو من مجلد models");
+  }
+  loadingBusy = false;
+  $("ttsLoad").disabled = false;
+  endTtsProgress();
+}
+
+async function speakText(text, lang, options){
+  if (!text) return;
+  if (piperOk && !piperFailed[lang]) {
+    try {
+      const needsLoad = PL.state(lang) !== "ready";
+      await PL.speak(text, lang, {
+        onProgress: function(l, t, src){ setTtsProgress(lang, l, t, src); }
+      });
+      if (needsLoad) endTtsProgress();
+      return;
+    } catch (e) {
+      piperFailed[lang] = true;
+      endTtsProgress();
+      toast("تعذّر Piper — يُستخدم صوت المتصفح");
+    }
+  }
+  if (hasTTS) speakTextBrowser(text, lang, options);
+}
+function stopSpeech(){
+  try { if (PL) PL.stop(); } catch (e) {}
+  try { if (hasTTS) window.speechSynthesis.cancel(); } catch (e) {}
 }
 
 function shownInfo(c){
@@ -2142,40 +2395,32 @@ function shownInfo(c){
   };
 }
 
+/**
+ * نطق النص الظاهر حالياً على البطاقة
+ */
 function speakCurrent(){
-  if (!hasTTS || st.mode !== "card" || !order.length) return;
+  if (!canSpeak || st.mode !== "card" || !order.length) return;
   const info = shownInfo(D.cards[order[idx]]);
   const text = speakable(info.text);
   if (!text) return;
 
-  let voice = null, lang;
-  if (info.lang === "fr") {
-    voice = pickVoice(["fr-fr", "fr"]);
-    lang = voice ? voice.lang : "fr-FR";
-  } else {
-    voice = pickVoice(["lb"]);
-    if (!voice) {
-      voice = pickVoice(["de-de", "de"]);
-      if (!warnedLb) { warnedLb = true; toast("لا يوجد صوت لوكسمبورغي — يُستخدم الألماني"); }
-    }
-    lang = voice ? voice.lang : "de-DE";
-  }
+  speakText(text, info.lang, { rate: 0.9 });
+}
 
-  try {
-    const synth = window.speechSynthesis;
-    synth.cancel();
-    const u = new window.SpeechSynthesisUtterance(text);
-    if (voice) u.voice = voice;
-    u.lang = lang;
-    u.rate = 0.9;
-    u.onerror = function(ev){
-      if (ev && (ev.error === "canceled" || ev.error === "interrupted")) return;
-      toast("تعذّر تشغيل الصوت");
-    };
-    synth.speak(u);
-  } catch (e) {
-    toast("تعذّر تشغيل الصوت");
-  }
+/* === النطق التلقائي عند القلب (المسار E) === */
+let autoSpeakToken = 0;
+function autoSpeakOnFlip() {
+  if (!st.autoSpeak || !canSpeak || !order.length) return;
+  const cardId = order[idx];
+  const myToken = ++autoSpeakToken;
+  setTimeout(function(){
+    // تجاهل إذا تغيّرت البطاقة أو عاد المستخدم للسؤال
+    if (myToken !== autoSpeakToken) return;
+    if (!order.length || order[idx] !== cardId || !flipped) return;
+    const info = shownInfo(D.cards[cardId]);
+    const text = speakable(info.text);
+    if (text) speakText(text, info.lang, { rate: 0.9 });
+  }, 300);
 }
 
 /* ============================================================
@@ -2290,6 +2535,14 @@ function updateTopButtons(){
   $("dueBtn").setAttribute("aria-pressed", st.due ? "true" : "false");
   $("modeBtn").textContent = st.mode === "card" ? "📋 عرض: بطاقات" : "📊 عرض: قائمة";
   $("modeBtn").setAttribute("aria-pressed", st.mode === "list" ? "true" : "false");
+
+  /* === زر النطق التلقائي (المسار E) === */
+  const asb = $("autoSpeakBtn");
+  if (asb) {
+    asb.textContent = st.autoSpeak ? "🔊 النطق التلقائي: نعم" : "🔇 النطق التلقائي: لا";
+    asb.setAttribute("aria-pressed", st.autoSpeak ? "true" : "false");
+    asb.classList.toggle("on", st.autoSpeak);
+  }
 }
 
 function rebuild(reset){
@@ -2385,7 +2638,7 @@ function render(){
   }
 
   for (let i = 0; i < rateBtns.length; i++) rateBtns[i].disabled = !flipped;
-  $("audioBtn").hidden = !hasTTS;
+  $("audioBtn").hidden = !canSpeak;
 
   const c = D.cards[order[idx]];
   const info = shownInfo(c);
@@ -2493,10 +2746,12 @@ function flip(){
   if (!order.length) return;
   flipped = !flipped;
   render();
+  autoSpeakOnFlip();   /* ← المسار E: نطق تلقائي عند القلب */
 }
 
 function go(d){
   if (!order.length) return;
+  stopSpeech();
   idx = (idx + d + order.length) % order.length;
   flipped = false;
   render();
@@ -2634,6 +2889,24 @@ $("audioBtn").addEventListener("click", speakCurrent);
       rate(parseInt(ev.currentTarget.getAttribute("data-rating"), 10));
     });
   }
+})();
+
+/* === زر النطق التلقائي (المسار E) === */
+(function bindAutoSpeak(){
+  const btn = $("autoSpeakBtn");
+  if (!btn) return;
+  btn.addEventListener("click", function(){
+    st.autoSpeak = !st.autoSpeak;
+    save();
+    updateTopButtons();
+    toast(st.autoSpeak ? "تم تفعيل النطق التلقائي 🔊" : "تم تعطيل النطق التلقائي 🔇");
+    /* إذا فعّل المستخدم النطق التلقائي والبطاقة مقلوبة الآن، انطق مباشرة */
+    if (st.autoSpeak && flipped) {
+      const info = shownInfo(D.cards[order[idx]]);
+      const text = speakable(info.text);
+      if (text) speakText(text, info.lang, { rate: 0.9 });
+    }
+  });
 })();
 
 $("shuf").addEventListener("click", function(){
@@ -2881,7 +3154,8 @@ $("exportBtn").addEventListener("click", function(){
     exportedAt: new Date().toISOString(),
     known: st.known,
     srs: st.srs,
-    daily: st.daily
+    daily: st.daily,
+    autoSpeak: st.autoSpeak   /* ← المسار E */
   };
   try {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -2942,6 +3216,10 @@ $("importFile").addEventListener("change", function(e){
         st.known = cleanKnown;
         st.srs = cleanSrsMap;
       }
+
+      /* === النطق التلقائي (المسار E) === */
+      if (typeof d.autoSpeak === "boolean") st.autoSpeak = d.autoSpeak;
+
       ensureSeeds();
       save();
       checkSchema();
@@ -2984,11 +3262,36 @@ if (migrated && Object.keys(st.known).length) {
 
 setInterval(updateSrsStat, 60000);
 
+$("ttsLoad").addEventListener("click", preloadVoices);
+$("ttsDel").addEventListener("click", async function(){
+  if (!confirm("حذف الأصوات المحفوظة (≈127MB)؟ يمكن تحميلها مجدداً.")) return;
+  try { await PL.removeAll(); } catch (e) {}
+  piperFailed.lb = false; piperFailed.fr = false;
+  refreshTtsStatus();
+  toast("تم حذف الأصوات");
+});
+refreshTtsStatus();
+try {
+  if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+    navigator.serviceWorker.register("sw.js").catch(function(){});
+  }
+} catch (e) {}
+
 if (window.matchMedia){
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
   const onChange = function(){ if (st.theme === "auto") applyTheme(); };
   if (mq.addEventListener) mq.addEventListener("change", onChange);
   else if (mq.addListener) mq.addListener(onChange);
+}
+
+/* === رسالة ترحيبية عند أول تشغيل للنطق التلقائي === */
+if (canSpeak && st.autoSpeak === false && !localStorage.getItem("sproochentest-speak-hint")) {
+  setTimeout(function(){
+    try {
+      localStorage.setItem("sproochentest-speak-hint", "1");
+      toast("💡 فعّل «🔊 النطق التلقائي» لسماع الجواب عند قلب البطاقة");
+    } catch (e) {}
+  }, 3500);
 }
 
 })();
