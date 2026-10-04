@@ -136,15 +136,26 @@ function prepare(lang, onProgress) {
   return sessions[lang];
 }
 
+const espeakOk = {};   // lang → اسم صوت espeak الذي نجح (لا نعيد المحاولة الفاشلة كل مرة)
+async function phonemizeFor(lang, cfg, text) {
+  const names = [];
+  if (espeakOk[lang]) names.push(espeakOk[lang]);
+  else {
+    names.push(cfg.espeak.voice);
+    const short = String(cfg.espeak.voice).split("-")[0];
+    if (short !== cfg.espeak.voice) names.push(short);
+  }
+  let lastErr;
+  for (const n of names) {
+    try { const ids = await phonemize(text, n); espeakOk[lang] = n; return ids; }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
 async function synth(lang, text) {
   const { session, cfg } = await prepare(lang);
-  let ids;
-  try { ids = await phonemize(text, cfg.espeak.voice); }
-  catch (e) {
-    const short = String(cfg.espeak.voice).split("-")[0];
-    if (short === cfg.espeak.voice) throw e;
-    ids = await phonemize(text, short);
-  }
+  const ids = await phonemizeFor(lang, cfg, text);
   const inf = cfg.inference || {};
   const feeds = {
     input: new ort.Tensor("int64", ids, [1, ids.length]),
@@ -215,26 +226,97 @@ function playBlob(blob, myToken) {
   });
 }
 
+/* ---------- طابور التوليد + ذاكرة الصوت ----------
+   التوليد يتم واحداً تلو الآخر. طلب المستخدم (الأولوية 0) يتقدّم على التحميل المسبق (الأولوية 1)،
+   فإذا كانت البطاقة جاهزة مسبقاً يبدأ الصوت فوراً عند الضغط. */
+const CACHE_MAX = 150;
+const cache = new Map();   // "lang|text" → { p: Promise<Blob>, job }
+const queue = [];
+let running = false;
+
+function dropJob(job) {
+  const hit = cache.get(job.key);
+  if (hit && hit.job === job) cache.delete(job.key);
+  job.reject(new Error("cancelled"));
+}
+
+function pump() {
+  if (running) return;
+  let i = queue.findIndex(function (j) { return j.prio === 0; });
+  if (i < 0) i = queue.length ? 0 : -1;
+  if (i < 0) return;
+  const job = queue.splice(i, 1)[0];
+  if (job.prio === 0 && job.tok !== token) { dropJob(job); return pump(); }   // لم يعد مطلوباً
+  running = true; job.started = true;
+  synth(job.lang, job.text)
+    .then(function (r) { job.resolve(toWav(r.pcm, r.rate)); }, job.reject)
+    .then(function () { running = false; pump(); });
+}
+
+function getBlob(lang, text, prio) {
+  const key = lang + "|" + text;
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key); cache.set(key, hit);
+    if (prio === 0 && hit.job && !hit.job.started) { hit.job.prio = 0; hit.job.tok = token; }
+    return hit.p;
+  }
+  const job = { lang: lang, text: text, key: key, prio: prio, tok: prio === 0 ? token : null, started: false };
+  const p = new Promise(function (res, rej) { job.resolve = res; job.reject = rej; });
+  p.catch(function () { const h = cache.get(key); if (h && h.job === job) cache.delete(key); });
+  cache.set(key, { p: p, job: job });
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+  queue.push(job); pump();
+  return p;
+}
+
+let prefetchGen = 0;
+async function prefetch(items) {
+  const gen = ++prefetchGen;
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].prio === 1) dropJob(queue.splice(i, 1)[0]);
+  for (const it of items || []) {
+    if (!it || !it.text || !VOICES[it.lang]) continue;
+    const lang = it.lang;
+    if (state[lang] !== "ready" && state[lang] !== "loading") {
+      let cached = false;
+      try { cached = await isCached(lang); } catch (e) {}
+      if (gen !== prefetchGen) return;
+      if (!cached) continue;                       // لا نبدأ تنزيل الصوت تلقائياً
+      prepare(lang).catch(function () {});
+    }
+    chunkify(it.text, 220).slice(0, 3).forEach(function (c) { getBlob(lang, c, 1).catch(function () {}); });
+  }
+}
+
 async function speak(text, lang, opts) {
   opts = opts || {};
   const my = ++token;
-  if (current) { try { current.pause(); } catch (e) {} current = null; }
+  if (current) { try { current.pause(); } catch (e) {} if (current._url) URL.revokeObjectURL(current._url); current = null; }
   const chunks = chunkify(text, 220);
   if (!chunks.length) return;
   await prepare(lang, opts.onProgress);
   if (my !== token) return;
-  let next = synth(lang, chunks[0]);
+  let next = getBlob(lang, chunks[0], 0);
   for (let i = 0; i < chunks.length; i++) {
-    const r = await next;
+    let blob;
+    try { blob = await next; } catch (e) { if (my !== token) return; throw e; }
     if (my !== token) return;
-    if (i + 1 < chunks.length) next = synth(lang, chunks[i + 1]);
-    await playBlob(toWav(r.pcm, r.rate), my);
+    if (i + 1 < chunks.length) next = getBlob(lang, chunks[i + 1], 0);
+    await playBlob(blob, my);
     if (my !== token) return;
   }
 }
 
+async function isCached(lang) {
+  const f = await opfsRead(VOICES[lang].id + ".onnx");
+  return !!(f && f.size >= MIN_ONNX);
+}
+
 async function removeAll() {
+  token++; prefetchGen++;
+  queue.length = 0; cache.clear();
   Object.keys(sessions).forEach(function (k) { delete sessions[k]; state[k] = "idle"; });
+  Object.keys(espeakOk).forEach(function (k) { delete espeakOk[k]; });
   try { const root = await navigator.storage.getDirectory(); await root.removeEntry(OPFS_DIR, { recursive: true }); } catch (e) {}
 }
 
@@ -243,11 +325,9 @@ window.PiperLocal = {
   voices: VOICES,
   prepare: prepare,
   speak: speak,
+  prefetch: prefetch,
   stop: stop,
   removeAll: removeAll,
   state: function (lang) { return state[lang] || "idle"; },
-  isCached: async function (lang) {
-    const f = await opfsRead(VOICES[lang].id + ".onnx");
-    return !!(f && f.size >= MIN_ONNX);
-  }
+  isCached: isCached
 };

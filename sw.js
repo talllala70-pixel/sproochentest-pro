@@ -1,10 +1,10 @@
 /* Service Worker — يخزّن ملفات التطبيق للعمل بدون إنترنت (النماذج تُخزَّن في OPFS وليس هنا) */
-const CACHE = "sproochentest-shell-v1";
+const CACHE = "sproochentest-shell-v2";
 const SHELL = ["./", "index.html", "piper-engine.js", "wasm/piper_phonemize.wasm", "wasm/piper_phonemize.data", "ort/ort-wasm-simd.wasm", "ort/ort-wasm.wasm"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {
-    return Promise.all(SHELL.map(function (u) { return c.add(u).catch(function () {}); }));
+    return Promise.all(SHELL.map(function (u) { return c.add(new Request(u, { cache: "reload" })).catch(function () {}); }));
   }).then(function () { return self.skipWaiting(); }));
 });
 self.addEventListener("activate", function (e) {
@@ -19,7 +19,7 @@ self.addEventListener("fetch", function (e) {
   if (url.origin !== location.origin) return;
   if (url.pathname.indexOf("/models/") !== -1) return;       // النماذج الكبيرة: OPFS
   if (req.headers.has("range")) return;
-  const isPage = req.mode === "navigate" || url.pathname.endsWith("index.html") || url.pathname.endsWith("/");
+  const isPage = req.mode === "navigate" || url.pathname.endsWith("index.html") || url.pathname.endsWith("piper-engine.js") || url.pathname.endsWith("/");
   e.respondWith(
     caches.open(CACHE).then(function (c) {
       return c.match(req).then(function (hit) {

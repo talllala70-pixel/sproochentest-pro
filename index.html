@@ -2125,69 +2125,6 @@ function updateSrsStat(){
 /* ============================================================
    5. الصوت (محسّن — المسار E)
    ============================================================ */
-const hasTTS = ("speechSynthesis" in window) && ("SpeechSynthesisUtterance" in window);
-let voices = [];
-let warnedLb = false;
-
-function loadVoices(){
-  try { voices = window.speechSynthesis.getVoices() || []; } catch (e) { voices = []; }
-}
-if (hasTTS) {
-  loadVoices();
-  try {
-    if (window.speechSynthesis.addEventListener) window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
-    else window.speechSynthesis.onvoiceschanged = loadVoices;
-  } catch (e) {}
-}
-
-/**
- * اختيار الصوت المناسب حسب اللغة
- * @param {string} lang - رمز اللغة (lb, fr, de)
- * @returns {SpeechSynthesisVoice|null}
- */
-function pickVoiceForLang(lang) {
-  if (!voices || !voices.length) return null;
-
-  const langLower = String(lang).toLowerCase();
-
-  if (langLower === "lb") {
-    for (let i = 0; i < voices.length; i++) {
-      const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
-      if (vLang.indexOf("lb") === 0) return voices[i];
-    }
-    const fallbacks = ["de-de", "de-at", "de-ch", "de"];
-    for (let f = 0; f < fallbacks.length; f++) {
-      for (let i = 0; i < voices.length; i++) {
-        const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
-        if (vLang === fallbacks[f] || vLang.indexOf(fallbacks[f] + "-") === 0) {
-          if (!warnedLb) {
-            warnedLb = true;
-            toast("لا يوجد صوت لوكسمبورغي — يُستخدم الألماني");
-          }
-          return voices[i];
-        }
-      }
-    }
-  }
-
-  if (langLower === "fr") {
-    const fallbacks = ["fr-fr", "fr-ca", "fr-be", "fr"];
-    for (let f = 0; f < fallbacks.length; f++) {
-      for (let i = 0; i < voices.length; i++) {
-        const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
-        if (vLang === fallbacks[f] || vLang.indexOf(fallbacks[f] + "-") === 0) return voices[i];
-      }
-    }
-  }
-
-  for (let i = 0; i < voices.length; i++) {
-    const vLang = String(voices[i].lang || "").toLowerCase().replace("_", "-");
-    if (vLang.indexOf(langLower) === 0) return voices[i];
-  }
-
-  return null;
-}
-
 /**
  * تنظيف النص لجعله قابلاً للنطق
  */
@@ -2201,113 +2138,12 @@ function speakable(t){
     .trim();
 }
 
-/**
- * تقسيم النص الطويل إلى جمل (Chunking)
- * المتصفحات لديها حد أقصى للنطق، لذا نقسم النص إلى جمل.
- * @param {string} text
- * @param {number} maxChunkLength
- * @returns {string[]}
- */
-function chunkifyText(text, maxChunkLength) {
-  maxChunkLength = maxChunkLength || 200;
-  if (!text) return [];
-
-  const sentenceRegex = /[^.!?]+[.!?]*/g;
-  const sentences = text.match(sentenceRegex) || [text];
-
-  const chunks = [];
-  let currentChunk = "";
-
-  for (let s = 0; s < sentences.length; s++) {
-    const trimmed = sentences[s].trim();
-    if (!trimmed) continue;
-
-    if (trimmed.length > maxChunkLength) {
-      const words = trimmed.split(/\s+/);
-      let subChunk = "";
-      for (let w = 0; w < words.length; w++) {
-        const candidate = subChunk ? subChunk + " " + words[w] : words[w];
-        if (candidate.length <= maxChunkLength) {
-          subChunk = candidate;
-        } else {
-          if (subChunk) chunks.push(subChunk.trim());
-          subChunk = words[w];
-        }
-      }
-      if (subChunk) chunks.push(subChunk.trim());
-    } else {
-      const candidate = currentChunk ? currentChunk + " " + trimmed : trimmed;
-      if (candidate.length <= maxChunkLength) {
-        currentChunk = candidate;
-      } else {
-        if (currentChunk) chunks.push(currentChunk.trim());
-        currentChunk = trimmed;
-      }
-    }
-  }
-
-  if (currentChunk) chunks.push(currentChunk.trim());
-
-  return chunks.filter(function(c){ return c.length > 0; });
-}
-
-/**
- * نطق نص باستخدام طابور speechSynthesis
- * @param {string} text - النص
- * @param {string} lang - رمز اللغة (lb, fr)
- * @param {Object} options - خيارات إضافية (rate, pitch, volume)
- */
-function speakTextBrowser(text, lang, options) {
-  if (!hasTTS || !text) return;
-
-  const synth = window.speechSynthesis;
-
-  // إلغاء أي نطق سابق لتفريغ الطابور
-  try { synth.cancel(); } catch (e) {}
-
-  const voice = pickVoiceForLang(lang);
-  const chunks = chunkifyText(text, 200);
-
-  if (!chunks.length) return;
-
-  const opts = options || {};
-  const rate = (typeof opts.rate === "number") ? opts.rate : 0.9;
-  const pitch = (typeof opts.pitch === "number") ? opts.pitch : 1.0;
-  const volume = (typeof opts.volume === "number") ? opts.volume : 1.0;
-
-  for (let i = 0; i < chunks.length; i++) {
-    const utterance = new SpeechSynthesisUtterance(chunks[i]);
-
-    if (voice) {
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
-    } else {
-      utterance.lang = lang === "fr" ? "fr-FR" : "de-DE";
-    }
-
-    utterance.rate = rate;
-    utterance.pitch = pitch;
-    utterance.volume = volume;
-
-    (function(index){
-      utterance.onerror = function(event){
-        if (event && (event.error === "canceled" || event.error === "interrupted")) return;
-        if (index === chunks.length - 1) toast("تعذّر تشغيل الصوت");
-      };
-    })(i);
-
-    try { synth.speak(utterance); } catch (e) { toast("تعذّر تشغيل الصوت"); return; }
-  }
-}
-
-
 /* ============================================================
-   Piper TTS المحلي (lb: marylux · fr: tom) مع احتياطي speechSynthesis
+   Piper TTS المحلي (lb: marylux · fr: tom) — بدون صوت المتصفح
    ============================================================ */
 const PL = window.PiperLocal || null;
 const piperOk = !!(PL && PL.supported);
-const canSpeak = piperOk || hasTTS;
-const piperFailed = {};
+const canSpeak = piperOk;
 let loadingBusy = false;
 
 function mb(n){ return (n / 1048576).toFixed(0); }
@@ -2331,7 +2167,7 @@ function endTtsProgress(){
 async function refreshTtsStatus(){
   const st = $("ttsStatus"), load = $("ttsLoad"), del = $("ttsDel");
   if (!piperOk) {
-    st.textContent = "🔈 Piper غير مدعوم في هذا المتصفح — يُستخدم صوت المتصفح";
+    st.textContent = "🔈 النطق غير مدعوم في هذا المتصفح";
     load.hidden = true; del.hidden = true;
     return;
   }
@@ -2351,10 +2187,10 @@ async function preloadVoices(){
     const langs = ["lb", "fr"];
     for (let i = 0; i < langs.length; i++) {
       const lg = langs[i];
-      piperFailed[lg] = false;
       await PL.prepare(lg, function(l, t, src){ setTtsProgress(lg, l, t, src); });
     }
     toast("تم تجهيز الأصوات ✓");
+    prefetchSpeech();
   } catch (e) {
     toast("تعذّر تحميل الأصوات — تحقق من الاتصال أو من مجلد models");
   }
@@ -2363,27 +2199,40 @@ async function preloadVoices(){
   endTtsProgress();
 }
 
-async function speakText(text, lang, options){
-  if (!text) return;
-  if (piperOk && !piperFailed[lang]) {
-    try {
-      const needsLoad = PL.state(lang) !== "ready";
-      await PL.speak(text, lang, {
-        onProgress: function(l, t, src){ setTtsProgress(lang, l, t, src); }
-      });
-      if (needsLoad) endTtsProgress();
-      return;
-    } catch (e) {
-      piperFailed[lang] = true;
-      endTtsProgress();
-      toast("تعذّر Piper — يُستخدم صوت المتصفح");
-    }
+async function speakText(text, lang){
+  if (!text || !piperOk) return;
+  const ready = PL.state(lang) === "ready";
+  let cached = ready;
+  if (!ready) { try { cached = await PL.isCached(lang); } catch (e) {} }
+  if (!cached) { toast("حمّل الأصوات أولاً: زر «⬇️ تحميل الأصوات»"); return; }
+  try {
+    await PL.speak(text, lang, {
+      onProgress: function(l, t, src){ setTtsProgress(lang, l, t, src); }
+    });
+    if (!ready) endTtsProgress();
+  } catch (e) {
+    endTtsProgress();
+    toast("تعذّر تشغيل الصوت");
   }
-  if (hasTTS) speakTextBrowser(text, lang, options);
 }
 function stopSpeech(){
   try { if (PL) PL.stop(); } catch (e) {}
-  try { if (hasTTS) window.speechSynthesis.cancel(); } catch (e) {}
+}
+
+/* توليد صوت البطاقة الحالية (الوجهان) والبطاقة التالية مسبقاً، فيبدأ النطق فوراً عند الضغط */
+function prefetchSpeech(){
+  if (!piperOk || st.mode !== "card" || !order.length) return;
+  const c = D.cards[order[idx]];
+  const other = st.dir === "lb" ? "fr" : "lb";
+  const front = { text: speakable(st.dir === "lb" ? c.lb : c.fr), lang: st.dir };
+  const back  = { text: speakable(st.dir === "lb" ? c.fr : c.lb), lang: other };
+  const items = flipped ? [back, front] : [front, back];
+  const nx = order[idx + 1];
+  if (nx != null && D.cards[nx]) {
+    const n = D.cards[nx];
+    items.push({ text: speakable(st.dir === "lb" ? n.lb : n.fr), lang: st.dir });
+  }
+  try { PL.prefetch(items.filter(function(i){ return i.text; })); } catch (e) {}
 }
 
 function shownInfo(c){
@@ -2404,23 +2253,15 @@ function speakCurrent(){
   const text = speakable(info.text);
   if (!text) return;
 
-  speakText(text, info.lang, { rate: 0.9 });
+  speakText(text, info.lang);
 }
 
 /* === النطق التلقائي عند القلب (المسار E) === */
-let autoSpeakToken = 0;
 function autoSpeakOnFlip() {
-  if (!st.autoSpeak || !canSpeak || !order.length) return;
-  const cardId = order[idx];
-  const myToken = ++autoSpeakToken;
-  setTimeout(function(){
-    // تجاهل إذا تغيّرت البطاقة أو عاد المستخدم للسؤال
-    if (myToken !== autoSpeakToken) return;
-    if (!order.length || order[idx] !== cardId || !flipped) return;
-    const info = shownInfo(D.cards[cardId]);
-    const text = speakable(info.text);
-    if (text) speakText(text, info.lang, { rate: 0.9 });
-  }, 300);
+  if (!st.autoSpeak || !canSpeak || !order.length || !flipped) return;
+  const info = shownInfo(D.cards[order[idx]]);
+  const text = speakable(info.text);
+  if (text) speakText(text, info.lang);
 }
 
 /* ============================================================
@@ -2639,6 +2480,7 @@ function render(){
 
   for (let i = 0; i < rateBtns.length; i++) rateBtns[i].disabled = !flipped;
   $("audioBtn").hidden = !canSpeak;
+  setTimeout(prefetchSpeech, 0);
 
   const c = D.cards[order[idx]];
   const info = shownInfo(c);
@@ -2904,7 +2746,7 @@ $("audioBtn").addEventListener("click", speakCurrent);
     if (st.autoSpeak && flipped) {
       const info = shownInfo(D.cards[order[idx]]);
       const text = speakable(info.text);
-      if (text) speakText(text, info.lang, { rate: 0.9 });
+      if (text) speakText(text, info.lang);
     }
   });
 })();
@@ -3266,7 +3108,6 @@ $("ttsLoad").addEventListener("click", preloadVoices);
 $("ttsDel").addEventListener("click", async function(){
   if (!confirm("حذف الأصوات المحفوظة (≈127MB)؟ يمكن تحميلها مجدداً.")) return;
   try { await PL.removeAll(); } catch (e) {}
-  piperFailed.lb = false; piperFailed.fr = false;
   refreshTtsStatus();
   toast("تم حذف الأصوات");
 });
