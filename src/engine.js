@@ -1,4 +1,4 @@
-import { createPiperPhonemize } from "./phonemize.js";
+import createPiperPhonemize from "./phonemize.js";
 import * as ortNs from "onnxruntime-web/wasm";
 
 const ort = ortNs.default || ortNs;
@@ -207,9 +207,16 @@ function chunkify(text, max) {
 let token = 0;
 let current = null;
 
+function release(a) {
+  if (!a) return;
+  try { a.pause(); } catch (e) {}
+  const u = a._url; a._url = null;
+  if (u) setTimeout(function () { URL.revokeObjectURL(u); }, 2000);   // لا نُبطل الرابط فوراً (يسبب ERR_FILE_NOT_FOUND)
+}
+
 function stop() {
   token++;
-  if (current) { try { current.pause(); } catch (e) {} if (current._url) URL.revokeObjectURL(current._url); current = null; }
+  if (current) { release(current); current = null; }
 }
 
 function playBlob(blob, myToken) {
@@ -218,11 +225,14 @@ function playBlob(blob, myToken) {
     const url = URL.createObjectURL(blob);
     const a = new Audio(url);
     a._url = url; current = a;
-    const done = function () { URL.revokeObjectURL(url); if (current === a) current = null; resolve(); };
-    a.onended = done;
-    a.onerror = function () { URL.revokeObjectURL(url); reject(new Error("audio")); };
+    const fin = function () { if (a._url) { URL.revokeObjectURL(a._url); a._url = null; } if (current === a) current = null; };
+    a.onended = function () { fin(); resolve(); };
+    a.onerror = function () { fin(); if (myToken !== token) resolve(); else reject(new Error("audio")); };
     const p = a.play();
-    if (p && p.catch) p.catch(function (e) { URL.revokeObjectURL(url); reject(e); });
+    if (p && p.catch) p.catch(function (e) {
+      fin();
+      if (myToken !== token || (e && e.name === "AbortError")) resolve(); else reject(e);
+    });
   });
 }
 
@@ -291,7 +301,7 @@ async function prefetch(items) {
 async function speak(text, lang, opts) {
   opts = opts || {};
   const my = ++token;
-  if (current) { try { current.pause(); } catch (e) {} if (current._url) URL.revokeObjectURL(current._url); current = null; }
+  if (current) { release(current); current = null; }
   const chunks = chunkify(text, 220);
   if (!chunks.length) return;
   await prepare(lang, opts.onProgress);

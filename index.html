@@ -2212,6 +2212,7 @@ async function speakText(text, lang){
     if (!ready) endTtsProgress();
   } catch (e) {
     endTtsProgress();
+    try { console.error("Piper:", e); } catch (x) {}
     toast("تعذّر تشغيل الصوت");
   }
 }
