@@ -4,7 +4,7 @@ Luxembourgish Sproochentest prep — flashcards (lb ↔ fr) with local Piper TTS
 
 ## Rebuilding the voice engine
 
-`piper-engine.js` is a bundle of `src/engine.js`. To rebuild after editing the source:
+Speech runs in a Web Worker: `piper-engine.js` (page API, from `src/engine.js`) talks to `piper-worker.js` (synthesis, from `src/worker.js`). To rebuild after editing the sources:
 
 ```
 npm install

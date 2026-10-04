@@ -187,6 +187,8 @@ textarea{
 .ttsbox .ttsbar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:6px;display:none}
 .ttsbox .ttsbar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
 .ttsbox.busy .ttsbar{display:block}
+.ttsbox .ttsspeed{display:inline-flex;gap:4px;align-items:center}
+.ttsbox .ttsspeed select{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:2px 6px}
 @media (prefers-reduced-motion: reduce){
   *{transition:none!important;animation:none!important}
 }
@@ -232,6 +234,14 @@ textarea{
       <span id="ttsStatus">🔈 الأصوات المحلية (Piper): …</span>
       <button class="btn tiny" id="ttsLoad" type="button">⬇️ تحميل الأصوات</button>
       <button class="btn tiny" id="ttsDel" type="button" hidden>🗑️ حذف</button>
+      <label class="ttsspeed">السرعة
+        <select id="ttsSpeed" aria-label="سرعة النطق">
+          <option value="1.3">أبطأ جداً</option>
+          <option value="1.15">أبطأ</option>
+          <option value="1" selected>عادي</option>
+          <option value="0.88">أسرع</option>
+        </select>
+      </label>
     </div>
     <div class="ttsbar" id="ttsBarWrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="ttsBar"></div></div>
   </div>
@@ -2199,17 +2209,100 @@ async function preloadVoices(){
   endTtsProgress();
 }
 
-async function speakText(text, lang){
-  if (!text || !piperOk) return;
-  const ready = PL.state(lang) === "ready";
-  let cached = ready;
-  if (!ready) { try { cached = await PL.isCached(lang); } catch (e) {} }
-  if (!cached) { toast("حمّل الأصوات أولاً: زر «⬇️ تحميل الأصوات»"); return; }
+/* ---------- تجهيز النص للنطق: اختيار الصوت لكل جزء ---------- */
+const FR_STRONG = /\b(les|est|pas|dans|avec|pour|que|qui|apr[èe]s|avant|comme|quand|sauf|toujours|jamais|seulement|mots?|verbes?|suivant|singulier|pluriel|masculin|f[ée]minin|sans|pr[ée]positions?|accusatif|infinitif|origine|exception|oral|jusqu|puis|recommence|r[ée]fl[ée]chi|s[ée]parable|politesse|majuscule|chiffre|adjectif|adverbe|devant|derri[èe]re|lettre|voyelle|consonne|prononc[ée]|utilis[ée]|on|il|ils|elles?|vers|va|fin|phrase)\b/i;
+const FR_STRONG_CARD = /\b(les|est|pas|dans|avec|pour|que|qui|apr[èe]s|avant|comme|quand|sauf|toujours|jamais|seulement|mots?|verbes?|suivant|singulier|pluriel|masculin|f[ée]minin|sans|pr[ée]positions?|accusatif|infinitif|origine|exception|oral|jusqu|puis|recommence|r[ée]fl[ée]chi|s[ée]parable|politesse|majuscule|chiffre|adjectif|adverbe)\b/i;
+
+function soundText(t){
+  return String(t)
+    .replace(/[«»"“”]/g, " ")
+    .replace(/\s*[·→≠>+]\s*/g, ", ")
+    .replace(/\s*[…—]\s*/g, ", ")
+    .replace(/\s*\/\s*/g, ", ")
+    .replace(/\s+=\s+/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[,\s]+|[,\s]+$/g, "")
+    .replace(/,\s*,/g, ",")
+    .trim();
+}
+
+/* معجم الكلمات: مأخوذ من بطاقات المفردات والجمل (غير القواعد) — كلمات تخص لغة واحدة فقط */
+let LEX = null;
+function lex(){
+  if (LEX) return LEX;
+  const lbw = new Set(), frw = new Set();
+  const words = function(s){ return String(s).toLowerCase().match(/\p{L}{2,}/gu) || []; };
+  D.cards.forEach(function(c){
+    if (c.k === "g") return;
+    words(c.lb).forEach(function(w){ lbw.add(w); });
+    words(c.fr).forEach(function(w){ frw.add(w); });
+  });
+  LEX = { lb: lbw, fr: frw, words: words };
+  return LEX;
+}
+const FR_TOKENS = new Set(["adjectif","adverbe","nom","ou","pronom","relatif","comparatif","superlatif","singulier","pluriel"]);
+function langScore(txt){
+  const L = lex(); let l = 0, f = 0;
+  L.words(txt).forEach(function(w){
+    if (FR_TOKENS.has(w)) { f++; return; }
+    const inL = L.lb.has(w), inF = L.fr.has(w);
+    if (inL && !inF) l++; else if (inF && !inL) f++;
+  });
+  if (FR_STRONG.test(txt)) f++;
+  return { l: l, f: f };
+}
+
+/* نص أحد وجهي البطاقة ← قائمة أجزاء [{text, lang}] */
+function planSpeech(card, side){          // side: "lb" أو "fr" (اسم الحقل)
+  const raw = String(side === "lb" ? card.lb : card.fr);
+  const other = String(side === "lb" ? card.fr : card.lb).toLowerCase();
+  const ruleCard = card.k === "g" && FR_STRONG_CARD.test(card.lb);   // بطاقة قاعدة: الشرح بالفرنسية في حقل lb
+  let t = raw.replace(/\s*\(([^)]*)\)/g, function(m, inner){
+    const s = inner.trim().toLowerCase();
+    if (/^(?:m|f|n|nn|f\/n|m\/f|pl)$/.test(s)) return "";               // علامات الجنس
+    if (s && other.indexOf(s) !== -1) return "";                          // شرح بلغة الوجه الآخر
+    if (FR_STRONG.test(s)) return "";
+    return " " + inner;
+  });
+  const out = [];
+  t.split(/\s+:\s+/).forEach(function(piece){
+    const txt = soundText(piece);
+    if (!txt) return;
+    const s = langScore(txt);
+    let lang = side;
+    if (side === "lb") { if (s.f > s.l) lang = "fr"; }
+    else if (s.l > s.f || (ruleCard && s.l === 0 && s.f === 0 && !/[èêàçùœ]/i.test(txt))) lang = "lb";
+    const last = out[out.length - 1];
+    if (last && last.lang === lang) last.text += ", " + txt; else out.push({ text: txt, lang: lang });
+  });
+  return out;
+}
+
+function shownPlan(){
+  const c = D.cards[order[idx]];
+  const side = flipped ? (st.dir === "lb" ? "fr" : "lb") : st.dir;
+  return planSpeech(c, side);
+}
+
+async function speakPlan(plan){
+  if (!plan.length || !piperOk) return;
+  const langs = [];
+  plan.forEach(function(p){ if (langs.indexOf(p.lang) < 0) langs.push(p.lang); });
+  let allReady = true, allCached = true;
+  for (let i = 0; i < langs.length; i++) {
+    if (PL.state(langs[i]) !== "ready") {
+      allReady = false;
+      let cached = false;
+      try { cached = await PL.isCached(langs[i]); } catch (e) {}
+      if (!cached) allCached = false;
+    }
+  }
+  if (!allCached) { toast("حمّل الأصوات أولاً: زر «⬇️ تحميل الأصوات»"); return; }
   try {
-    await PL.speak(text, lang, {
-      onProgress: function(l, t, src){ setTtsProgress(lang, l, t, src); }
+    await PL.speak(plan, {
+      onProgress: function(l, t, src){ setTtsProgress(langs[0], l, t, src); }
     });
-    if (!ready) endTtsProgress();
+    if (!allReady) endTtsProgress();
   } catch (e) {
     endTtsProgress();
     try { console.error("Piper:", e); } catch (x) {}
@@ -2220,20 +2313,18 @@ function stopSpeech(){
   try { if (PL) PL.stop(); } catch (e) {}
 }
 
-/* توليد صوت البطاقة الحالية (الوجهان) والبطاقة التالية مسبقاً، فيبدأ النطق فوراً عند الضغط */
+/* توليد صوت البطاقة الحالية (الوجهان) والبطاقتين التاليتين مسبقاً، فيبدأ النطق فوراً عند الضغط */
 function prefetchSpeech(){
   if (!piperOk || st.mode !== "card" || !order.length) return;
   const c = D.cards[order[idx]];
   const other = st.dir === "lb" ? "fr" : "lb";
-  const front = { text: speakable(st.dir === "lb" ? c.lb : c.fr), lang: st.dir };
-  const back  = { text: speakable(st.dir === "lb" ? c.fr : c.lb), lang: other };
-  const items = flipped ? [back, front] : [front, back];
-  const nx = order[idx + 1];
-  if (nx != null && D.cards[nx]) {
-    const n = D.cards[nx];
-    items.push({ text: speakable(st.dir === "lb" ? n.lb : n.fr), lang: st.dir });
+  const front = planSpeech(c, st.dir), back = planSpeech(c, other);
+  const plans = flipped ? [back, front] : [front, back];
+  for (let k = 1; k <= 2; k++) {
+    const nx = order[idx + k];
+    if (nx != null && D.cards[nx]) plans.push(planSpeech(D.cards[nx], st.dir));
   }
-  try { PL.prefetch(items.filter(function(i){ return i.text; })); } catch (e) {}
+  try { PL.prefetch(plans.filter(function(p){ return p.length; })); } catch (e) {}
 }
 
 function shownInfo(c){
@@ -2250,19 +2341,13 @@ function shownInfo(c){
  */
 function speakCurrent(){
   if (!canSpeak || st.mode !== "card" || !order.length) return;
-  const info = shownInfo(D.cards[order[idx]]);
-  const text = speakable(info.text);
-  if (!text) return;
-
-  speakText(text, info.lang);
+  speakPlan(shownPlan());
 }
 
 /* === النطق التلقائي عند القلب (المسار E) === */
 function autoSpeakOnFlip() {
   if (!st.autoSpeak || !canSpeak || !order.length || !flipped) return;
-  const info = shownInfo(D.cards[order[idx]]);
-  const text = speakable(info.text);
-  if (text) speakText(text, info.lang);
+  speakPlan(shownPlan());
 }
 
 /* ============================================================
@@ -2745,9 +2830,7 @@ $("audioBtn").addEventListener("click", speakCurrent);
     toast(st.autoSpeak ? "تم تفعيل النطق التلقائي 🔊" : "تم تعطيل النطق التلقائي 🔇");
     /* إذا فعّل المستخدم النطق التلقائي والبطاقة مقلوبة الآن، انطق مباشرة */
     if (st.autoSpeak && flipped) {
-      const info = shownInfo(D.cards[order[idx]]);
-      const text = speakable(info.text);
-      if (text) speakText(text, info.lang);
+      speakPlan(shownPlan());
     }
   });
 })();
@@ -3112,6 +3195,22 @@ $("ttsDel").addEventListener("click", async function(){
   refreshTtsStatus();
   toast("تم حذف الأصوات");
 });
+(function initSpeed(){
+  const sel = $("ttsSpeed");
+  if (!sel) return;
+  if (!piperOk) { sel.parentNode.hidden = true; return; }
+  let v = "1";
+  try { v = localStorage.getItem("sproochentest-tts-speed") || "1"; } catch (e) {}
+  if (!Array.prototype.some.call(sel.options, function(o){ return o.value === v; })) v = "1";
+  sel.value = v;
+  PL.setSpeed(parseFloat(v));
+  sel.addEventListener("change", function(){
+    try { localStorage.setItem("sproochentest-tts-speed", sel.value); } catch (e) {}
+    PL.setSpeed(parseFloat(sel.value));
+    prefetchSpeech();
+    speakCurrent();
+  });
+})();
 refreshTtsStatus();
 try {
   if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {

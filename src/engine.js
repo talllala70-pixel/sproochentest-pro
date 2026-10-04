@@ -1,207 +1,57 @@
-import createPiperPhonemize from "./phonemize.js";
-import * as ortNs from "onnxruntime-web/wasm";
-
-const ort = ortNs.default || ortNs;
+/* واجهة الصفحة: تتكلم مع piper-worker.js وتشغّل الصوت. تعرّف window.PiperLocal. */
 const BASE = new URL(".", document.currentScript ? document.currentScript.src : location.href).href;
-const HF = "https://huggingface.co/rhasspy/piper-voices/resolve/main/";
-const VOICES = {
-  lb: { id: "lb_LU-marylux-medium", path: "lb/lb_LU/marylux/medium/" },
-  fr: { id: "fr_FR-tom-medium",     path: "fr/fr_FR/tom/medium/" }
-};
-const OPFS_DIR = "sproochentest-piper-v1";
-const MIN_ONNX = 5 * 1024 * 1024;
+const LANGS = ["lb", "fr"];
+const BASE_SCALE = { lb: 1.3, fr: 1.0 };   // اللوكسمبورغي أبطأ افتراضياً (سرعته الأصلية عالية)
+let speed = 1;                              // معامل المستخدم: >1 أبطأ
 
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.proxy = false;
-ort.env.wasm.wasmPaths = BASE + "ort/";
+let worker = null, seq = 0;
+const pending = new Map();                  // id → { resolve, reject, onProgress }
+const state = {};
+const prepP = {};
+let dropWaiters = {};
 
-/* ---------- OPFS ---------- */
-async function dirHandle() {
-  const root = await navigator.storage.getDirectory();
-  return root.getDirectoryHandle(OPFS_DIR, { create: true });
-}
-async function opfsRead(name) {
-  try {
-    const d = await dirHandle();
-    const fh = await d.getFileHandle(name);
-    return await fh.getFile();
-  } catch (e) { return null; }
-}
-async function opfsWrite(name, blob) {
-  try {
-    const d = await dirHandle();
-    const fh = await d.getFileHandle(name, { create: true });
-    const w = await fh.createWritable();
-    await w.write(blob);
-    await w.close();
-    return true;
-  } catch (e) { return false; }
-}
-async function opfsRemove(name) {
-  try { const d = await dirHandle(); await d.removeEntry(name); } catch (e) {}
-}
-
-/* ---------- download with progress ---------- */
-async function fetchBlob(url, onProgress, minSize) {
-  const res = await fetch(url, { cache: "no-cache" });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const ct = (res.headers.get("Content-Type") || "").toLowerCase();
-  if (ct.indexOf("text/html") !== -1) throw new Error("not a model file");
-  const total = +(res.headers.get("Content-Length") || 0);
-  const reader = res.body && res.body.getReader();
-  if (!reader) { const b = await res.blob(); if (minSize && b.size < minSize) throw new Error("too small"); return b; }
-  const parts = []; let loaded = 0;
-  for (;;) {
-    const r = await reader.read();
-    if (r.done) break;
-    parts.push(r.value); loaded += r.value.length;
-    if (onProgress) onProgress(loaded, total);
-  }
-  if (minSize && loaded < minSize) throw new Error("too small");
-  return new Blob(parts);
-}
-
-/* يحاول: OPFS ← models/ المحلي ← Hugging Face (مرة واحدة ثم يُخزَّن) */
-async function getFile(fileName, subPath, onProgress, isModel) {
-  const cached = await opfsRead(fileName);
-  if (cached && (!isModel || cached.size >= MIN_ONNX)) {
-    if (onProgress) onProgress(cached.size, cached.size, "cache");
-    return cached;
-  }
-  if (cached) await opfsRemove(fileName);
-  let blob = null, lastErr = null;
-  const sources = [
-    { url: BASE + "models/" + fileName, tag: "local" },
-    { url: HF + subPath + fileName, tag: "remote" }
-  ];
-  for (const s of sources) {
-    try {
-      blob = await fetchBlob(s.url, function (l, t) { if (onProgress) onProgress(l, t, s.tag); }, isModel ? MIN_ONNX : 0);
-      break;
-    } catch (e) { lastErr = e; blob = null; }
-  }
-  if (!blob) throw lastErr || new Error("download failed");
-  await opfsWrite(fileName, blob);
-  return blob;
-}
-
-/* ---------- phonemizer assets (مرة واحدة) ---------- */
-let phonemeAssets = null;
-async function loadPhonemeAssets() {
-  if (phonemeAssets) return phonemeAssets;
-  phonemeAssets = (async () => {
-    const [w, d] = await Promise.all([
-      fetch(BASE + "wasm/piper_phonemize.wasm").then(r => { if (!r.ok) throw new Error("wasm"); return r.blob(); }),
-      fetch(BASE + "wasm/piper_phonemize.data").then(r => { if (!r.ok) throw new Error("data"); return r.blob(); })
-    ]);
-    return { wasm: URL.createObjectURL(w), data: URL.createObjectURL(d) };
-  })();
-  try { return await phonemeAssets; } catch (e) { phonemeAssets = null; throw e; }
-}
-
-async function phonemize(text, espeakVoice) {
-  const assets = await loadPhonemeAssets();
-  const input = JSON.stringify([{ text: text.trim() }]);
-  return new Promise(async (resolve, reject) => {
-    try {
-      const mod = await createPiperPhonemize({
-        print: (data) => { try { resolve(JSON.parse(data).phoneme_ids); } catch (e) { reject(e); } },
-        printErr: () => {},
-        locateFile: (u) => u.endsWith(".wasm") ? assets.wasm : (u.endsWith(".data") ? assets.data : u)
-      });
-      mod.callMain(["-l", espeakVoice, "--input", input, "--espeak_data", "/espeak-ng-data"]);
-    } catch (e) { reject(e); }
-  });
-}
-
-/* ---------- sessions ---------- */
-const sessions = {};   // lang → Promise<{session, cfg}>
-const state = {};      // lang → "idle" | "loading" | "ready" | "error"
-
-function prepare(lang, onProgress) {
-  const v = VOICES[lang];
-  if (!v) return Promise.reject(new Error("unknown lang"));
-  if (sessions[lang]) return sessions[lang];
-  state[lang] = "loading";
-  sessions[lang] = (async () => {
-    const cfgBlob = await getFile(v.id + ".onnx.json", v.path, null, false);
-    const cfg = JSON.parse(await cfgBlob.text());
-    const model = await getFile(v.id + ".onnx", v.path, onProgress, true);
-    await loadPhonemeAssets();
-    const session = await ort.InferenceSession.create(await model.arrayBuffer(), { executionProviders: ["wasm"] });
-    state[lang] = "ready";
-    return { session, cfg };
-  })();
-  sessions[lang].catch(function () { state[lang] = "error"; delete sessions[lang]; });
-  return sessions[lang];
-}
-
-const espeakOk = {};   // lang → اسم صوت espeak الذي نجح (لا نعيد المحاولة الفاشلة كل مرة)
-async function phonemizeFor(lang, cfg, text) {
-  const names = [];
-  if (espeakOk[lang]) names.push(espeakOk[lang]);
-  else {
-    names.push(cfg.espeak.voice);
-    const short = String(cfg.espeak.voice).split("-")[0];
-    if (short !== cfg.espeak.voice) names.push(short);
-  }
-  let lastErr;
-  for (const n of names) {
-    try { const ids = await phonemize(text, n); espeakOk[lang] = n; return ids; }
-    catch (e) { lastErr = e; }
-  }
-  throw lastErr;
-}
-
-async function synth(lang, text) {
-  const { session, cfg } = await prepare(lang);
-  const ids = await phonemizeFor(lang, cfg, text);
-  const inf = cfg.inference || {};
-  const feeds = {
-    input: new ort.Tensor("int64", ids, [1, ids.length]),
-    input_lengths: new ort.Tensor("int64", [ids.length]),
-    scales: new ort.Tensor("float32", [inf.noise_scale ?? 0.667, inf.length_scale ?? 1, inf.noise_w ?? 0.8])
+function getWorker() {
+  if (worker) return worker;
+  worker = new Worker(BASE + "piper-worker.js");
+  worker.onmessage = function (ev) {
+    const m = ev.data;
+    if (m.t === "state") { state[m.lang] = m.value; if (m.value === "error" || m.value === "idle") delete prepP[m.lang]; return; }
+    if (m.t === "progress") { const p = pending.get(m.id); if (p && p.onProgress) p.onProgress(m.loaded, m.total, m.src); return; }
+    if (m.t === "dropAck") { const f = dropWaiters[m.id]; if (f) { delete dropWaiters[m.id]; f(); } return; }
+    if (m.t === "res") {
+      const p = pending.get(m.id); if (!p) return;
+      pending.delete(m.id);
+      if (m.ok) p.resolve(m.wav ? new Blob([m.wav], { type: "audio/wav" }) : m.value); else p.reject(new Error(m.err));
+    }
   };
-  if (cfg.speaker_id_map && Object.keys(cfg.speaker_id_map).length) feeds.sid = new ort.Tensor("int64", [0]);
-  const out = await session.run(feeds);
-  return { pcm: out.output.data, rate: cfg.audio.sample_rate };
+  worker.onerror = function () {
+    pending.forEach(function (p) { p.reject(new Error("worker")); });
+    pending.clear();
+    worker = null;
+    LANGS.forEach(function (l) { state[l] = "error"; delete prepP[l]; });
+  };
+  return worker;
 }
-
-function toWav(pcm, rate) {
-  const n = pcm.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
-  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt ");
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  w(36, "data"); v.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true); }
-  return new Blob([buf], { type: "audio/wav" });
-}
-
-/* ---------- تقسيم النص ---------- */
-function chunkify(text, max) {
-  max = max || 220;
-  const t = String(text).trim();
-  if (!t) return [];
-  const sentences = t.match(/[^.!?…\n]+[.!?…]*/g) || [t];
-  const out = []; let cur = "";
-  const push = () => { const c = cur.trim(); if (c) out.push(c); cur = ""; };
-  sentences.forEach(function (s) {
-    s = s.trim(); if (!s) return;
-    if (s.length > max) {
-      push();
-      let piece = "";
-      s.split(/\s+/).forEach(function (wd) {
-        if ((piece + " " + wd).trim().length > max) { if (piece) out.push(piece.trim()); piece = wd; }
-        else piece = piece ? piece + " " + wd : wd;
-      });
-      cur = piece;
-    } else if ((cur + " " + s).trim().length > max) { push(); cur = s; }
-    else cur = cur ? cur + " " + s : s;
+function call(msg, onProgress) {
+  const id = ++seq;
+  return new Promise(function (resolve, reject) {
+    pending.set(id, { resolve: resolve, reject: reject, onProgress: onProgress });
+    msg.id = id;
+    getWorker().postMessage(msg);
   });
-  push();
-  return out;
 }
+
+const progressCb = {};
+function prepare(lang, onProgress) {
+  if (state[lang] === "ready") return Promise.resolve();
+  if (onProgress) progressCb[lang] = onProgress;
+  if (prepP[lang]) return prepP[lang];
+  const p = call({ t: "prepare", lang: lang }, function (l, t, src) { if (progressCb[lang]) progressCb[lang](l, t, src); });
+  prepP[lang] = p;
+  p.then(function () { delete prepP[lang]; }, function () { delete prepP[lang]; });
+  return p;
+}
+function isCached(lang) { return call({ t: "isCached", lang: lang }); }
 
 /* ---------- التشغيل ---------- */
 let token = 0;
@@ -211,11 +61,15 @@ function release(a) {
   if (!a) return;
   try { a.pause(); } catch (e) {}
   const u = a._url; a._url = null;
-  if (u) setTimeout(function () { URL.revokeObjectURL(u); }, 2000);   // لا نُبطل الرابط فوراً (يسبب ERR_FILE_NOT_FOUND)
+  if (u) setTimeout(function () { URL.revokeObjectURL(u); }, 2000);   // لا نُبطل الرابط فوراً (ERR_FILE_NOT_FOUND)
 }
-
-function stop() {
+function bumpToken() {
   token++;
+  if (worker) worker.postMessage({ t: "tok", tok: token });
+  return token;
+}
+function stop() {
+  bumpToken();
   if (current) { release(current); current = null; }
 }
 
@@ -236,108 +90,125 @@ function playBlob(blob, myToken) {
   });
 }
 
-/* ---------- طابور التوليد + ذاكرة الصوت ----------
-   التوليد يتم واحداً تلو الآخر. طلب المستخدم (الأولوية 0) يتقدّم على التحميل المسبق (الأولوية 1)،
-   فإذا كانت البطاقة جاهزة مسبقاً يبدأ الصوت فوراً عند الضغط. */
-const CACHE_MAX = 150;
-const cache = new Map();   // "lang|text" → { p: Promise<Blob>, job }
-const queue = [];
-let running = false;
+/* ---------- ذاكرة الصوت ---------- */
+const CACHE_MAX = 200;
+const cache = new Map();   // "lang|scale|text" → { p, prio, id }
 
-function dropJob(job) {
-  const hit = cache.get(job.key);
-  if (hit && hit.job === job) cache.delete(job.key);
-  job.reject(new Error("cancelled"));
-}
-
-function pump() {
-  if (running) return;
-  let i = queue.findIndex(function (j) { return j.prio === 0; });
-  if (i < 0) i = queue.length ? 0 : -1;
-  if (i < 0) return;
-  const job = queue.splice(i, 1)[0];
-  if (job.prio === 0 && job.tok !== token) { dropJob(job); return pump(); }   // لم يعد مطلوباً
-  running = true; job.started = true;
-  synth(job.lang, job.text)
-    .then(function (r) { job.resolve(toWav(r.pcm, r.rate)); }, job.reject)
-    .then(function () { running = false; pump(); });
-}
+function scaleFor(lang) { return +((BASE_SCALE[lang] || 1) * speed).toFixed(3); }
 
 function getBlob(lang, text, prio) {
-  const key = lang + "|" + text;
+  const ls = scaleFor(lang);
+  const key = lang + "|" + ls + "|" + text;
   const hit = cache.get(key);
   if (hit) {
     cache.delete(key); cache.set(key, hit);
-    if (prio === 0 && hit.job && !hit.job.started) { hit.job.prio = 0; hit.job.tok = token; }
+    if (prio === 0 && hit.prio === 1) { hit.prio = 0; getWorker().postMessage({ t: "upgrade", key: key, tok: token }); }
     return hit.p;
   }
-  const job = { lang: lang, text: text, key: key, prio: prio, tok: prio === 0 ? token : null, started: false };
-  const p = new Promise(function (res, rej) { job.resolve = res; job.reject = rej; });
-  p.catch(function () { const h = cache.get(key); if (h && h.job === job) cache.delete(key); });
-  cache.set(key, { p: p, job: job });
+  const entry = { prio: prio };
+  entry.p = call({ t: "synth", key: key, lang: lang, text: text, ls: ls, prio: prio, tok: prio === 0 ? token : null });
+  entry.p.catch(function () { if (cache.get(key) === entry) cache.delete(key); });
+  cache.set(key, entry);
   if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
-  queue.push(job); pump();
-  return p;
+  return entry.p;
 }
 
+function flatten(plan) {
+  const out = [];
+  (plan || []).forEach(function (it) {
+    if (!it || !it.text || !BASE_SCALE[it.lang]) return;
+    chunkify(it.text, 220).forEach(function (c) { out.push({ lang: it.lang, text: c }); });
+  });
+  return out;
+}
+
+/* تقسيم النص ≤ max حرفاً */
+function chunkify(text, max) {
+  max = max || 220;
+  const t = String(text).trim();
+  if (!t) return [];
+  const sentences = t.match(/[^.!?…\n]+[.!?…]*/g) || [t];
+  const out = []; let cur = "";
+  const push = function () { const c = cur.trim(); if (c) out.push(c); cur = ""; };
+  sentences.forEach(function (s) {
+    s = s.trim(); if (!s) return;
+    if (s.length > max) {
+      push();
+      let piece = "";
+      s.split(/\s+/).forEach(function (wd) {
+        if ((piece + " " + wd).trim().length > max) { if (piece) out.push(piece.trim()); piece = wd; }
+        else piece = piece ? piece + " " + wd : wd;
+      });
+      cur = piece;
+    } else if ((cur + " " + s).trim().length > max) { push(); cur = s; }
+    else cur = cur ? cur + " " + s : s;
+  });
+  push();
+  return out;
+}
+
+/* تحميل مسبق: يُلغي ما لم يبدأ من التحميل المسبق السابق ثم يضيف القائمة الجديدة بالترتيب */
 let prefetchGen = 0;
-async function prefetch(items) {
+async function prefetch(plans) {
   const gen = ++prefetchGen;
-  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].prio === 1) dropJob(queue.splice(i, 1)[0]);
-  for (const it of items || []) {
-    if (!it || !it.text || !VOICES[it.lang]) continue;
+  const parts = [];
+  (plans || []).forEach(function (plan) { flatten(plan).slice(0, 3).forEach(function (x) { parts.push(x); }); });
+  const id = ++seq;
+  await new Promise(function (res) { dropWaiters[id] = res; getWorker().postMessage({ t: "dropPrefetch", id: id }); });
+  if (gen !== prefetchGen) return;
+  for (const it of parts) {
     const lang = it.lang;
-    if (state[lang] !== "ready" && state[lang] !== "loading") {
+    if (state[lang] !== "ready" && state[lang] !== "loading" && !prepP[lang]) {
       let cached = false;
       try { cached = await isCached(lang); } catch (e) {}
       if (gen !== prefetchGen) return;
       if (!cached) continue;                       // لا نبدأ تنزيل الصوت تلقائياً
       prepare(lang).catch(function () {});
     }
-    chunkify(it.text, 220).slice(0, 3).forEach(function (c) { getBlob(lang, c, 1).catch(function () {}); });
+    getBlob(lang, it.text, 1).catch(function () {});
   }
 }
 
-async function speak(text, lang, opts) {
+/* plan = [{text, lang}, ...] — يُنطق بالترتيب، وكل جزء بصوت لغته */
+async function speak(plan, opts) {
   opts = opts || {};
-  const my = ++token;
+  const my = bumpToken();
   if (current) { release(current); current = null; }
-  const chunks = chunkify(text, 220);
-  if (!chunks.length) return;
-  await prepare(lang, opts.onProgress);
+  const parts = flatten(plan);
+  if (!parts.length) return;
+  const langs = [];
+  parts.forEach(function (p) { if (langs.indexOf(p.lang) < 0) langs.push(p.lang); });
+  await Promise.all(langs.map(function (l) { return prepare(l, opts.onProgress); }));
   if (my !== token) return;
-  let next = getBlob(lang, chunks[0], 0);
-  for (let i = 0; i < chunks.length; i++) {
+  let next = getBlob(parts[0].lang, parts[0].text, 0);
+  for (let i = 0; i < parts.length; i++) {
     let blob;
     try { blob = await next; } catch (e) { if (my !== token) return; throw e; }
     if (my !== token) return;
-    if (i + 1 < chunks.length) next = getBlob(lang, chunks[i + 1], 0);
+    if (i + 1 < parts.length) next = getBlob(parts[i + 1].lang, parts[i + 1].text, 0);
     await playBlob(blob, my);
     if (my !== token) return;
   }
 }
 
-async function isCached(lang) {
-  const f = await opfsRead(VOICES[lang].id + ".onnx");
-  return !!(f && f.size >= MIN_ONNX);
-}
-
 async function removeAll() {
   token++; prefetchGen++;
-  queue.length = 0; cache.clear();
-  Object.keys(sessions).forEach(function (k) { delete sessions[k]; state[k] = "idle"; });
-  Object.keys(espeakOk).forEach(function (k) { delete espeakOk[k]; });
-  try { const root = await navigator.storage.getDirectory(); await root.removeEntry(OPFS_DIR, { recursive: true }); } catch (e) {}
+  cache.clear();
+  if (current) { release(current); current = null; }
+  try { await call({ t: "removeAll" }); } catch (e) {}
+  LANGS.forEach(function (l) { state[l] = "idle"; delete prepP[l]; });
 }
 
+function setSpeed(m) { if (m > 0.4 && m < 3) speed = m; }
+
 window.PiperLocal = {
-  supported: !!(navigator.storage && navigator.storage.getDirectory && window.WebAssembly),
-  voices: VOICES,
+  supported: !!(navigator.storage && navigator.storage.getDirectory && window.WebAssembly && window.Worker),
   prepare: prepare,
   speak: speak,
   prefetch: prefetch,
   stop: stop,
   removeAll: removeAll,
+  setSpeed: setSpeed,
   state: function (lang) { return state[lang] || "idle"; },
   isCached: isCached
 };
