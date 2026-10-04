@@ -1,0 +1,13 @@
+{
+  "name": "sproochentest-pro",
+  "private": true,
+  "description": "Luxembourgish Sproochentest flashcards with local Piper TTS",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@diffusionstudio/piper-wasm": "1.0.0",
+    "esbuild": "^0.28.0",
+    "onnxruntime-web": "1.18.0"
+  }
+}
